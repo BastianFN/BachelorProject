@@ -50,18 +50,39 @@ pub fn parse_json_file_to_segments(path: PathBuf) -> Vec<Segment> {
     let file = File::open(path).expect("File not found");
     let reader = BufReader::new(file);
 
+    let mut json_data_accumulator = String::new();
+    let mut brace_count = 0;
+
     for line in reader.lines() {
-        println!("line: {:?}", line);
-        let json_data = line.expect("Error reading line");
-        println!("json_data: {}", json_data);
-        if let Ok(Some(timestamp)) = extract_timestamp(&json_data) {
-            segments.push(Segment::Seg(timestamp as usize, 0, vec![json_data]));
-        } else {
-            // Error handling or logging can be improved here
-            println!(
-                "Error parsing JSON line or timestamp not found: {}",
-                json_data
-            );
+        let line = line.expect("Error reading line");
+
+        // Update brace count and accumulate the line
+        for c in line.chars() {
+            match c {
+                '{' => brace_count += 1,
+                '}' => brace_count -= 1,
+                _ => {}
+            }
+        }
+
+        json_data_accumulator.push_str(&line);
+
+        // If brace_count is 0, we have a complete JSON object
+        if brace_count == 0 && !json_data_accumulator.trim().is_empty() {
+            // Process the accumulated JSON object
+            if let Ok(Some(timestamp)) = extract_timestamp(&json_data_accumulator) {
+                segments.push(Segment::Seg(
+                    timestamp as usize,
+                    0,
+                    vec![json_data_accumulator.clone()],
+                ));
+            } else {
+                println!(
+                    "Error parsing JSON line or timestamp not found: {}",
+                    json_data_accumulator
+                );
+            }
+            json_data_accumulator.clear(); // Reset for the next object
         }
     }
 
@@ -71,7 +92,7 @@ pub fn parse_json_file_to_segments(path: PathBuf) -> Vec<Segment> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{io::Write, path::Path};
     use tempfile::NamedTempFile;
 
     #[test]
@@ -139,6 +160,104 @@ mod tests {
             );
         } else {
             panic!("Expected Segment::Seg, found {:?}", segments[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_json_file_to_segments_multiple_objects() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(
+            temp_file,
+            r#"{{"timestamp": 1707854392, "event": "testEvent1"}}
+{{"timestamp": 1707854393, "event": "testEvent2"}}"#
+        )
+        .unwrap();
+
+        let path = temp_file.into_temp_path();
+        let segments = parse_json_file_to_segments(path.to_path_buf());
+
+        assert_eq!(segments.len(), 2);
+        if let Segment::Seg(ts, _, data) = &segments[0] {
+            assert_eq!(*ts, 1707854392 as usize);
+            assert!(
+                data.contains(&r#"{"timestamp": 1707854392, "event": "testEvent1"}"#.to_string())
+            );
+        } else {
+            panic!("Expected Segment::Seg, found {:?}", segments[0]);
+        }
+        if let Segment::Seg(ts, _, data) = &segments[1] {
+            assert_eq!(*ts, 1707854393 as usize);
+            assert!(
+                data.contains(&r#"{"timestamp": 1707854393, "event": "testEvent2"}"#.to_string())
+            );
+        } else {
+            panic!("Expected Segment::Seg, found {:?}", segments[1]);
+        }
+    }
+
+    #[test]
+    fn test_parse_json_file_to_segments_invalid_json() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(
+            temp_file,
+            r#"{{"timestamp": 1707854392, "event" "testEvent1"}}"#
+        )
+        .unwrap();
+
+        let path = temp_file.into_temp_path();
+        let segments = parse_json_file_to_segments(path.to_path_buf());
+
+        assert_eq!(segments.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_json_file_to_segments_missing_timestamp() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, r#"{{"event": "testEvent1"}}"#).unwrap();
+
+        let path = temp_file.into_temp_path();
+        let segments = parse_json_file_to_segments(path.to_path_buf());
+
+        assert_eq!(segments.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_json_file_with_provided_objects() {
+        // Path to the JSON file containing test data
+        let path_to_json = Path::new("src/parser/test_data.json");
+        let path_buf = path_to_json.to_path_buf();
+
+        let segments = parse_json_file_to_segments(path_buf);
+
+        let expected_timestamps = vec![
+            1708449109,
+            1708449110,
+            1708449112,
+            1708449111,
+            1708449110,
+            1708449111,
+            1708449112,
+            1708449111,
+            1708449110,
+            1708449111,
+            1708449109,
+        ];
+
+        assert_eq!(
+            segments.len(),
+            expected_timestamps.len(),
+            "The number of segments does not match the expected number."
+        );
+
+        for (segment, &expected_timestamp) in segments.iter().zip(expected_timestamps.iter()) {
+            if let Segment::Seg(ts, _, _) = segment {
+                assert_eq!(
+                    *ts, expected_timestamp as usize,
+                    "Timestamp does not match the expected value."
+                );
+            } else {
+                panic!("Expected Segment::Seg, found {:?}", segment);
+            }
         }
     }
 }

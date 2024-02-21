@@ -5,6 +5,12 @@ extern crate timely;
 extern crate timely_communication;
 // #[macro_use]
 extern crate abomonation;
+
+extern crate serde;
+extern crate serde_json;
+extern crate tempfile;
+
+
 #[macro_use]
 extern crate abomonation_derive;
 extern crate rand;

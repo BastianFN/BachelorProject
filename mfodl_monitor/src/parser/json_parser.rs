@@ -52,37 +52,44 @@ pub fn parse_json_file_to_segments(path: PathBuf) -> Vec<Segment> {
 
     let mut json_data_accumulator = String::new();
     let mut brace_count = 0;
+    let mut bracket_count = 0;
+    let mut in_string = false;
 
     for line in reader.lines() {
         let line = line.expect("Error reading line");
 
-        // Update brace count and accumulate the line
+        // Update brace and bracket count, considering strings
         for c in line.chars() {
-            match c {
-                '{' => brace_count += 1,
-                '}' => brace_count -= 1,
-                _ => {}
+            if c == '"' && !in_string {
+                in_string = true;
+            } else if c == '"' && in_string {
+                in_string = false;
+            }
+
+            if !in_string {
+                match c {
+                    '{' => brace_count += 1,
+                    '}' => brace_count -= 1,
+                    '[' => bracket_count += 1,
+                    ']' => bracket_count -= 1,
+                    _ => {}
+                }
             }
         }
 
         json_data_accumulator.push_str(&line);
 
-        // If brace_count is 0, we have a complete JSON object
-        if brace_count == 0 && !json_data_accumulator.trim().is_empty() {
-            // Process the accumulated JSON object
+        // Check for a complete JSON object or array
+        if brace_count == 0 && bracket_count == 0 && !json_data_accumulator.trim().is_empty() {
+            // Process the JSON data
             if let Ok(Some(timestamp)) = extract_timestamp(&json_data_accumulator) {
                 segments.push(Segment::Seg(
                     timestamp as usize,
-                    0,
+                    timestamp as usize,
                     vec![json_data_accumulator.clone()],
                 ));
-            } else {
-                println!(
-                    "Error parsing JSON line or timestamp not found: {}",
-                    json_data_accumulator
-                );
             }
-            json_data_accumulator.clear(); // Reset for the next object
+            json_data_accumulator.clear(); // Reset for the next JSON object or array
         }
     }
 
@@ -230,17 +237,8 @@ mod tests {
         let segments = parse_json_file_to_segments(path_buf);
 
         let expected_timestamps = vec![
-            1708449109,
-            1708449110,
-            1708449112,
-            1708449111,
-            1708449110,
-            1708449111,
-            1708449112,
-            1708449111,
-            1708449110,
-            1708449111,
-            1708449109,
+            1708449109, 1708449110, 1708449112, 1708449111, 1708449110, 1708449111, 1708449112,
+            1708449111, 1708449110, 1708449111, 1708449109,
         ];
 
         assert_eq!(
@@ -259,5 +257,44 @@ mod tests {
                 panic!("Expected Segment::Seg, found {:?}", segment);
             }
         }
+    }
+
+    #[test]
+    fn test_json_with_string_containing_braces() {
+        let json_data = r#"{"timestamp": 1627848123, "message": "Example {with braces}"}"#;
+        assert!(matches!(
+            extract_timestamp(json_data).unwrap(),
+            Some(1627848123)
+        ));
+    }
+
+    #[test]
+    fn test_json_arrays() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file
+            .write_all(b"[{\"timestamp\": 1627848123}, {\"timestamp\": 1627848184}]\n")
+            .unwrap();
+
+        let path = temp_file.into_temp_path();
+        let segments = parse_json_file_to_segments(path.to_path_buf());
+
+        assert_eq!(segments.len(), 1);
+    }
+
+    #[test]
+    fn test_complex_json_structure() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"{\"events\": [{\"timestamp\": 1627848123, \"user\": \"user1\"}, {\"event\": {\"timestamp\": 1627848184, \"user\": \"user2\"}}]}\n").unwrap();
+
+        let path = temp_file.into_temp_path();
+        let segments = parse_json_file_to_segments(path.to_path_buf());
+
+        assert!(segments.len() > 0);
+    }
+
+    #[test]
+    fn test_incomplete_json() {
+        let json_data = r#"{"timestamp": 1627848123"#;
+        assert!(extract_timestamp(json_data).is_err());
     }
 }

@@ -9,6 +9,10 @@ pub enum Segment {
     Seg(usize, usize, Vec<String>),
 }
 
+pub fn parse_json_wrapper(json_data: &str) -> Result<Value> {
+    serde_json::from_str(json_data)
+}
+
 // Function to extract a timestamp from a generic JSON object
 fn extract_timestamp(json_data: &str) -> Result<Option<u64>> {
     let value: Value = serde_json::from_str(json_data)?;

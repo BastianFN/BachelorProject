@@ -9,3 +9,4 @@ mfodl_monitor/target/debug/deps/mfodl_monitor-5428907b26a33c20
 *.bin
 *.rlib
 *.rmeta
+*.rmeta

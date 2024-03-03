@@ -16,6 +16,7 @@ pub enum Formula {
 
     CstFact(String, Vec<Constant>),
     Fact(String, Vec<Arg>),
+    
     Not(Box<Formula>),
     Equals(String, Box<Arg>),
 

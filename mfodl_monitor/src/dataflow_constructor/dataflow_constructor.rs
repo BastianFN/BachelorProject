@@ -3,18 +3,21 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
+use nom::print;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Map};
+use timely::dataflow::operators::Map;
 
-use timely::dataflow::operators::{Broadcast, Operator};
 use timely::dataflow::operators::FrontierNotificator;
+use timely::dataflow::operators::{Broadcast, Operator};
 
-use timely::dataflow::{Stream, Scope};
+use timely::dataflow::{Scope, Stream};
 
 use parse_formula;
 
 use constants::calculate_hash;
-use dataflow_constructor::types::{FlowValues::Data as Data, FlowValues::MetaData as MetaData, OperatorOptions, Record as Record, TimeFlowValues};
+use dataflow_constructor::types::{
+    FlowValues::Data, FlowValues::MetaData, OperatorOptions, Record, TimeFlowValues,
+};
 
 use evaluation_plan_generator::evaluation_plan_generator::Expr::*;
 use evaluation_plan_generator::evaluation_plan_generator::*;
@@ -23,7 +26,10 @@ use parser::formula_syntax_tree::Arg::*;
 use parser::formula_syntax_tree::Formula::*;
 use parser::formula_syntax_tree::*;
 
-use dataflow_constructor::operators::{find_common_bound_variables, find_common_bound_variables1, get_wanted_indices, Operators, SupportOperators};
+use dataflow_constructor::operators::{
+    find_common_bound_variables, find_common_bound_variables1, get_wanted_indices, Operators,
+    SupportOperators,
+};
 use parser::formula_syntax_tree::Constant::Str;
 
 type MonitorStream<G> = Stream<G, Record>;
@@ -33,15 +39,20 @@ type TimeStream<G> = Stream<G, TimeFlowValues>;
 struct DataflowConstructor<G: Scope<Timestamp = usize>> {
     data_stream: Stream<G, String>,
     stream_map: HashMap<Expr, (Vec<String>, MonitorStream<G>)>,
-    time_stream: Stream<G, TimeFlowValues>
+    time_stream: Stream<G, TimeFlowValues>,
 }
 
-pub fn create_dataflow<G: Scope<Timestamp = usize>>(policy: Formula, data_stream: DataStream<G>, time_stream: TimeStream<G>, options: OperatorOptions) -> (Vec<String>, MonitorStream<G>) {
+pub fn create_dataflow<G: Scope<Timestamp = usize>>(
+    policy: Formula,
+    data_stream: DataStream<G>,
+    time_stream: TimeStream<G>,
+    options: OperatorOptions,
+) -> (Vec<String>, MonitorStream<G>) {
     let output_time_steam = time_stream.clone();
     let mut dataflow_constructor = DataflowConstructor {
         data_stream,
         stream_map: HashMap::new(),
-        time_stream
+        time_stream,
     };
 
     let mut visitor = 0;
@@ -49,21 +60,33 @@ pub fn create_dataflow<G: Scope<Timestamp = usize>>(policy: Formula, data_stream
     let optimized_plan = optimize_evaluation_plan(plan.clone());
     //println!("Original  plan {:?}", plan);
     //println!("Optimized plan {:?}", optimized_plan);
-    dataflow_constructor.create_stream(&mut visitor, optimized_plan.clone(), options.get_deduplication());
+    dataflow_constructor.create_stream(
+        &mut visitor,
+        optimized_plan.clone(),
+        options.get_deduplication(),
+    );
 
     if dataflow_constructor.stream_exists(optimized_plan.clone()) {
         let (tmp_str, tmp_stream) = dataflow_constructor.get_stream(optimized_plan.clone());
         // add exhaust operator to filter all metadata before pushing data to output
         //println!("OUTPUT {:?}", tmp_str);
-        return (tmp_str.clone(), tmp_stream.exhaust(&mut 0, output_time_steam.broadcast(), tmp_str, options).1);
+        return (
+            tmp_str.clone(),
+            tmp_stream
+                .exhaust(&mut 0, output_time_steam.broadcast(), tmp_str, options)
+                .1,
+        );
     }
 
     panic!("Error - output stream missing");
 }
 
-
 impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
-    fn create_base_stream(&mut self, visitor: &mut usize, f: &Formula) -> (Vec<String>, MonitorStream<G>) {
+    fn create_base_stream(
+        &mut self,
+        visitor: &mut usize,
+        f: &Formula,
+    ) -> (Vec<String>, MonitorStream<G>) {
         *visitor = visitor.clone() + 1;
         let (f_name, args) = new_split_fact(f);
         let exchange = Exchange::new(move |event| calculate_hash(event));
@@ -72,9 +95,9 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         let f_vars = fv(args.clone());
         let f_vars_args: Vec<Arg> = args.clone();
 
-        let output =
-            if !simple_mode {
-                self.data_stream.unary_frontier(exchange, "Base Stream", move |_cap, _info| {
+        let output = if !simple_mode {
+            self.data_stream
+                .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
                     let mut notifier = FrontierNotificator::new();
                     let mut stash: HashMap<usize, HashSet<String>> = HashMap::new();
                     move |input, output| {
@@ -87,29 +110,41 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
 
                             let name_copy = f_name.clone();
                             let f_vars_args_copy = f_vars_args.clone();
-
                             data.iter().for_each(|d| {
+                                println!("In operator {:?}", d);
                                 match parse_formula(&d) {
                                     Formula::Fact(name, vec) => {
                                         if vec.is_empty() && name == name_copy {
                                             output.session(&time).give(Data(true, vec![]));
                                         } else {
                                             if name == name_copy {
-                                                if let Some(mapping) = match_vars(f_vars_args_copy.clone(), vec.clone()) {
-                                                    let mut duplicates : HashSet<Arg> = HashSet::new();
-                                                    let mut new_vars: Vec<Constant> = Vec::with_capacity(vec.len());
+                                                if let Some(mapping) = match_vars(
+                                                    f_vars_args_copy.clone(),
+                                                    vec.clone(),
+                                                ) {
+                                                    let mut duplicates: HashSet<Arg> =
+                                                        HashSet::new();
+                                                    let mut new_vars: Vec<Constant> =
+                                                        Vec::with_capacity(vec.len());
                                                     for arg in &f_vars_args_copy {
                                                         match arg {
                                                             Cst(_) => {
                                                                 //ignore
                                                             }
                                                             Var(_v) => {
-                                                                if let Some(res) = mapping.get(arg) {
+                                                                if let Some(res) = mapping.get(arg)
+                                                                {
                                                                     match res {
                                                                         Cst(x) => {
-                                                                            if !duplicates.contains(arg) {
-                                                                                new_vars.push(x.clone());
-                                                                                duplicates.insert(arg.clone());
+                                                                            if !duplicates
+                                                                                .contains(arg)
+                                                                            {
+                                                                                new_vars.push(
+                                                                                    x.clone(),
+                                                                                );
+                                                                                duplicates.insert(
+                                                                                    arg.clone(),
+                                                                                );
                                                                             }
                                                                         }
                                                                         _ => {}
@@ -120,24 +155,30 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                     }
 
                                                     if stash.contains_key(&tp) {
-                                                        if !stash.entry(tp).or_default().contains(d) {
-                                                            stash.entry(tp).or_default().insert(d.clone());
-                                                            output.session(&time).give(Data(true, new_vars));
+                                                        if !stash.entry(tp).or_default().contains(d)
+                                                        {
+                                                            stash
+                                                                .entry(tp)
+                                                                .or_default()
+                                                                .insert(d.clone());
+                                                            output
+                                                                .session(&time)
+                                                                .give(Data(true, new_vars));
                                                         }
                                                     } else {
                                                         let mut tmp = HashSet::with_capacity(8);
                                                         tmp.insert(d.clone());
                                                         stash.insert(tp, tmp);
-                                                        output.session(&time).give(Data(true, new_vars));
+                                                        output
+                                                            .session(&time)
+                                                            .give(Data(true, new_vars));
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                     Eos => {
-                                        output
-                                            .session(&time)
-                                            .give(MetaData(false, false));
+                                        output.session(&time).give(MetaData(false, false));
                                     }
                                     _ => {}
                                 };
@@ -149,8 +190,9 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                         });
                     }
                 })
-            } else {
-                self.data_stream.unary_frontier(exchange, "Base Stream", move |_cap, _info| {
+        } else {
+            self.data_stream
+                .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
                     let mut notifier = FrontierNotificator::new();
                     let mut stash: HashMap<usize, HashSet<String>> = HashMap::new();
                     move |input, output| {
@@ -172,11 +214,14 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                             if name == name_copy {
                                                 if stash.contains_key(&tp) {
                                                     if !stash.entry(tp).or_default().contains(d) {
-                                                        stash.entry(tp).or_default().insert(d.clone());
+                                                        stash
+                                                            .entry(tp)
+                                                            .or_default()
+                                                            .insert(d.clone());
                                                         let mut tmp = Vec::with_capacity(vec.len());
                                                         for v in vec {
                                                             match v {
-                                                                Cst(x) => {tmp.push(x)}
+                                                                Cst(x) => tmp.push(x),
                                                                 Var(_) => {}
                                                             }
                                                         }
@@ -189,7 +234,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                     let mut tmp = Vec::with_capacity(vec.len());
                                                     for v in vec {
                                                         match v {
-                                                            Cst(x) => {tmp.push(x)}
+                                                            Cst(x) => tmp.push(x),
                                                             Var(_) => {}
                                                         }
                                                     }
@@ -199,9 +244,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                         }
                                     }
                                     Eos => {
-                                        output
-                                            .session(&time)
-                                            .give(MetaData(false, false));
+                                        output.session(&time).give(MetaData(false, false));
                                     }
                                     _ => {}
                                 };
@@ -213,34 +256,37 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                         });
                     }
                 })
-            };
-
+        };
 
         let plan = generate_evaluation_plan(f);
-        self.stream_map.insert(plan, (f_vars.clone(), output.clone()));
+        self.stream_map
+            .insert(plan, (f_vars.clone(), output.clone()));
 
         (f_vars, output)
     }
-    fn create_let_stream(&mut self, visitor: &mut usize, f: &Formula, pred_args: &mut Vec<Arg>, alpha_attrs: &Vec<String>, stream: MonitorStream<G>) -> MonitorStream<G> {
+    fn create_let_stream(
+        &mut self,
+        visitor: &mut usize,
+        f: &Formula,
+        pred_args: &mut Vec<Arg>,
+        alpha_attrs: &Vec<String>,
+        stream: MonitorStream<G>,
+    ) -> MonitorStream<G> {
         *visitor = visitor.clone() + 1;
         let (_, mut f_args) = split_f(f.clone());
 
         let indices = get_reordered_indices(pred_args, alpha_attrs);
         f_args = indices.into_iter().map(|i| f_args[i].clone()).collect();
 
-        let flat_map_output = stream.flat_map(move|rec| {
-            match rec.clone() {
-                Data(t, tuple) => {
-                    let d_vars_assignment = assign_d_vars(f_args.clone(), tuple);
-                    return match d_vars_assignment {
-                        Some(d_vars) => {
-                            Some(Data(t, d_vars))
-                        }
-                        None => None
-                    }
-                }
-                _ => Some(rec)
+        let flat_map_output = stream.flat_map(move |rec| match rec.clone() {
+            Data(t, tuple) => {
+                let d_vars_assignment = assign_d_vars(f_args.clone(), tuple);
+                return match d_vars_assignment {
+                    Some(d_vars) => Some(Data(t, d_vars)),
+                    None => None,
+                };
             }
+            _ => Some(rec),
         });
         flat_map_output
     }
@@ -248,48 +294,52 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
     fn create_true_stream(&mut self, visitor: &mut usize) -> (Vec<String>, MonitorStream<G>) {
         *visitor = visitor.clone() + 1;
 
-        let output = self.time_stream
+        let output = self
+            .time_stream
             .unary(Pipeline, "True Stream", move |_cap, _info| {
                 move |input, output| {
                     while let Some((time, data)) = input.next() {
-                        data.iter().for_each(|tfv| {
-                            match tfv {
-                                TimeFlowValues::Timestamp(_) => {
-                                    output.session(&time).give(Data(true, vec![]));
-                                }
-                                TimeFlowValues::EOS => {
-                                    output.session(&time).give(MetaData(false, false))
-                                }
+                        data.iter().for_each(|tfv| match tfv {
+                            TimeFlowValues::Timestamp(_) => {
+                                output.session(&time).give(Data(true, vec![]));
+                            }
+                            TimeFlowValues::EOS => {
+                                output.session(&time).give(MetaData(false, false))
                             }
                         });
                     }
                 }
             });
-        self.stream_map.insert(FULL, (vec![].clone(), output.clone()));
+        self.stream_map
+            .insert(FULL, (vec![].clone(), output.clone()));
         (vec![], output)
     }
 
-    fn create_value_stream(&mut self, visitor: &mut usize, f: String, value: Arg) -> (Vec<String>, MonitorStream<G>) {
+    fn create_value_stream(
+        &mut self,
+        visitor: &mut usize,
+        f: String,
+        value: Arg,
+    ) -> (Vec<String>, MonitorStream<G>) {
         *visitor = visitor.clone() + 1;
         let f_vars = vec![f.clone()];
 
         let val = match value {
-            Cst(x) => {x}
-            Var(x) => {Str(x)}
+            Cst(x) => x,
+            Var(x) => Str(x),
         };
 
-        let output = self.time_stream
+        let output = self
+            .time_stream
             .unary(Pipeline, "Fixed Value Stream", move |_cap, _info| {
                 move |input, output| {
                     while let Some((time, data)) = input.next() {
-                        data.iter().for_each(|tfv| {
-                            match tfv {
-                                TimeFlowValues::Timestamp(_) => {
-                                    output.session(&time).give(Data(true, vec![val.clone()]));
-                                }
-                                TimeFlowValues::EOS => {
-                                    output.session(&time).give(MetaData(false, false))
-                                }
+                        data.iter().for_each(|tfv| match tfv {
+                            TimeFlowValues::Timestamp(_) => {
+                                output.session(&time).give(Data(true, vec![val.clone()]));
+                            }
+                            TimeFlowValues::EOS => {
+                                output.session(&time).give(MetaData(false, false))
                             }
                         });
                     }
@@ -297,7 +347,8 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
             });
 
         let plan = generate_evaluation_plan(&parse_formula("VALUE"));
-        self.stream_map.insert(plan, (f_vars.clone(), output.clone()));
+        self.stream_map
+            .insert(plan, (f_vars.clone(), output.clone()));
 
         (f_vars, output)
     }
@@ -305,57 +356,72 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
     fn create_false_stream(&mut self, visitor: &mut usize) -> (Vec<String>, MonitorStream<G>) {
         *visitor = visitor.clone() + 1;
 
-        let output = self.time_stream
+        let output = self
+            .time_stream
             .unary(Pipeline, "False Stream", move |_cap, _info| {
                 move |input, output| {
                     while let Some((time, data)) = input.next() {
-                        data.iter().for_each(|tfv| {
-                            match tfv {
-                                TimeFlowValues::EOS => {
-                                    output.session(&time).give(MetaData(false, false))
-                                }
-                                _ => {}
+                        data.iter().for_each(|tfv| match tfv {
+                            TimeFlowValues::EOS => {
+                                output.session(&time).give(MetaData(false, false))
                             }
+                            _ => {}
                         });
                     }
                 }
             });
-        self.stream_map.insert(EMPTY, (vec![].clone(), output.clone()));
+        self.stream_map
+            .insert(EMPTY, (vec![].clone(), output.clone()));
         (vec![], output)
     }
 
     fn create_stream(&mut self, visitor: &mut usize, plan: Expr, dedup: bool) {
-        self.create_stream_from_evaluation_plan(visitor, plan, dedup, &mut HashMap::new(), &mut HashMap::new());
+        self.create_stream_from_evaluation_plan(
+            visitor,
+            plan,
+            dedup,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        );
     }
 
-
     //fn create_stream_from_evaluation_plan(&mut self, visitor: &mut usize, plan: Expr, dedup: bool, ) -> (Vec<String>, MonitorStream<G>) {
-    fn create_stream_from_evaluation_plan(&mut self, visitor: &mut usize, plan: Expr, dedup: bool, let_stream_map: &mut HashMap<(String, Vec<String>),MonitorStream<G>>, let_attrs_map: &mut HashMap<(String, Vec<String>),Vec<Arg>>, ) -> (Vec<String>, MonitorStream<G>) {
+    fn create_stream_from_evaluation_plan(
+        &mut self,
+        visitor: &mut usize,
+        plan: Expr,
+        dedup: bool,
+        let_stream_map: &mut HashMap<(String, Vec<String>), MonitorStream<G>>,
+        let_attrs_map: &mut HashMap<(String, Vec<String>), Vec<Arg>>,
+    ) -> (Vec<String>, MonitorStream<G>) {
         if self.stream_map.contains_key(&plan) {
             return self.stream_map.get(&plan).unwrap().clone();
         }
         let out = match plan.clone() {
-            FULL => {
-                self.create_true_stream(visitor)
-            }
-            EMPTY => {
-                self.create_false_stream(visitor)
-            }
-            VarEquals(var, arg) => {
-                self.create_value_stream(visitor, var.clone(), arg)
-            }
-            Expr::Equals(var, arg) => {
-                self.create_value_stream(visitor, var.clone(), *arg)
-            }
+            FULL => self.create_true_stream(visitor),
+            EMPTY => self.create_false_stream(visitor),
+            VarEquals(var, arg) => self.create_value_stream(visitor, var.clone(), arg),
+            Expr::Equals(var, arg) => self.create_value_stream(visitor, var.clone(), *arg),
             Expr::Fact(f_name, f_args) => {
                 let f = Formula::Fact(f_name.clone(), f_args.clone());
                 let new_attrs = get_attributes(plan.clone(), let_attrs_map);
                 for (pred_name, alpha_attrs) in let_stream_map.keys() {
                     if &f_name == pred_name && f_args.len() == alpha_attrs.len() {
-                        let let_stream = let_stream_map.get(&(pred_name.clone(), alpha_attrs.clone())).unwrap().clone();
+                        let let_stream = let_stream_map
+                            .get(&(pred_name.clone(), alpha_attrs.clone()))
+                            .unwrap()
+                            .clone();
 
-                        let pred_args = let_attrs_map.get_mut(&(pred_name.to_string(), alpha_attrs.to_vec())).unwrap();
-                        let stream = self.create_let_stream(visitor, &f, pred_args, &alpha_attrs, let_stream);
+                        let pred_args = let_attrs_map
+                            .get_mut(&(pred_name.to_string(), alpha_attrs.to_vec()))
+                            .unwrap();
+                        let stream = self.create_let_stream(
+                            visitor,
+                            &f,
+                            pred_args,
+                            &alpha_attrs,
+                            let_stream,
+                        );
 
                         return (new_attrs, stream);
                     }
@@ -364,108 +430,313 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                 (new_attrs, stream)
             }
             Join(e1, e2) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
-                (merge_variables_string(at.clone(), at1.clone()) ,lhs.join(visitor, &rhs, &at, &at1).1)
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                (
+                    merge_variables_string(at.clone(), at1.clone()),
+                    lhs.join(visitor, &rhs, &at, &at1).1,
+                )
             }
-            Expr::Next(e1, interval) =>{
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
+            Expr::Next(e1, interval) => {
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 //let attrs = get_attributes(*e1, let_attrs_map);
                 if interval.get_start() == Some(0) && interval.is_infinite() {
-                    stream.distribute(&mut 0, true, &at, &vec![]).1.
-                        next_zero_inf(visitor, &at)
+                    stream
+                        .distribute(&mut 0, true, &at, &vec![])
+                        .1
+                        .next_zero_inf(visitor, &at)
                 } else {
-                    (at.clone(), stream.distribute(&mut 0, false, &vec![], &at).1.
-                        next(visitor, &self.time_stream.broadcast(), &at, interval).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, false, &vec![], &at)
+                            .1
+                            .next(visitor, &self.time_stream.broadcast(), &at, interval)
+                            .1,
+                    )
                 }
             }
-            Expr::Prev(e1, interval) =>{
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
+            Expr::Prev(e1, interval) => {
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 if interval.get_start() == Some(0) && interval.is_infinite() {
-                    (at.clone(), stream.distribute(&mut 0, true, &at, &vec![]).1.
-                        prev_zero_inf(visitor, &self.time_stream.broadcast(),&at).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, true, &at, &vec![])
+                            .1
+                            .prev_zero_inf(visitor, &self.time_stream.broadcast(), &at)
+                            .1,
+                    )
                 } else {
-                (at.clone(), stream.distribute(&mut 0, false, &vec![], &at).1.
-                        prev(visitor, &self.time_stream.broadcast(),&at, interval).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, false, &vec![], &at)
+                            .1
+                            .prev(visitor, &self.time_stream.broadcast(), &at, interval)
+                            .1,
+                    )
                 }
             }
-            Expr::Once(e1, interval) =>{
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
+            Expr::Once(e1, interval) => {
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 if interval.get_start() == Some(0) && interval.is_infinite() {
-                    (at.clone(), stream.distribute(&mut 0, false, &vec![], &at).1.
-                        once_zero_inf(visitor, &self.time_stream.broadcast(), &at).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, false, &vec![], &at)
+                            .1
+                            .once_zero_inf(visitor, &self.time_stream.broadcast(), &at)
+                            .1,
+                    )
                 } else {
-                    (at.clone(), stream.distribute(&mut 0, false, &vec![], &at).1.
-                        once(visitor, &self.time_stream.broadcast(),&at, interval, dedup).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, false, &vec![], &at)
+                            .1
+                            .once(visitor, &self.time_stream.broadcast(), &at, interval, dedup)
+                            .1,
+                    )
                 }
             }
-            Expr::Eventually(e1, interval) =>{
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
+            Expr::Eventually(e1, interval) => {
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 if interval.get_start() == Some(0) && interval.is_infinite() {
-                    (at.clone(), stream.distribute(&mut 0, false, &vec![], &at).1.
-                        eventually_zero_inf(visitor, &at).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, false, &vec![], &at)
+                            .1
+                            .eventually_zero_inf(visitor, &at)
+                            .1,
+                    )
                 } else {
-                    (at.clone(), stream.distribute(&mut 0, false, &vec![], &at).1.
-                        eventually(visitor, &self.time_stream.broadcast(),&at, interval, dedup).1)
+                    (
+                        at.clone(),
+                        stream
+                            .distribute(&mut 0, false, &vec![], &at)
+                            .1
+                            .eventually(
+                                visitor,
+                                &self.time_stream.broadcast(),
+                                &at,
+                                interval,
+                                dedup,
+                            )
+                            .1,
+                    )
                 }
             }
             Expr::Since(e1, e2, interval) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
 
-                lhs.distribute(&mut 0, true, &at, &at1).1.since(visitor,
+                lhs.distribute(&mut 0, true, &at, &at1).1.since(
+                    visitor,
                     rhs.distribute(&mut 0, false, &at, &at1).1,
-                    self.time_stream.broadcast().clone(), &at, &at1, interval, dedup
+                    self.time_stream.broadcast().clone(),
+                    &at,
+                    &at1,
+                    interval,
+                    dedup,
                 )
             }
             Expr::Until(e1, e2, interval) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 lhs.distribute(&mut 0, true, &at, &at1).1.until(
                     visitor,
                     rhs.distribute(&mut 0, false, &at, &at1).1,
-                    self.time_stream.broadcast().clone(), &at, &at1, interval, dedup
+                    self.time_stream.broadcast().clone(),
+                    &at,
+                    &at1,
+                    interval,
+                    dedup,
                 )
             }
             Expr::NegSince(e1, e2, interval) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 lhs.distribute(&mut 0, true, &at, &at1).1.neg_since(
-                    visitor, rhs.distribute(&mut 0, false, &at, &at1).1,
-                    self.time_stream.broadcast().clone(), &at, &at1, interval, dedup)
+                    visitor,
+                    rhs.distribute(&mut 0, false, &at, &at1).1,
+                    self.time_stream.broadcast().clone(),
+                    &at,
+                    &at1,
+                    interval,
+                    dedup,
+                )
             }
             Expr::NegUntil(e1, e2, interval) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 lhs.distribute(&mut 0, true, &at, &at1).1.neg_until(
-                    visitor, rhs.distribute(&mut 0, false, &at, &at1).1,
-                    self.time_stream.broadcast().clone(), &at, &at1, interval, dedup
+                    visitor,
+                    rhs.distribute(&mut 0, false, &at, &at1).1,
+                    self.time_stream.broadcast().clone(),
+                    &at,
+                    &at1,
+                    interval,
+                    dedup,
                 )
             }
             UnionJoin(e1, e2) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 (at.clone(), lhs.union(visitor, &rhs, &at, &at1).1)
             }
             Antijoin(e1, e2) => {
-                let (at, lhs) = self.create_stream_from_evaluation_plan(visitor, *e1.clone(), dedup, let_stream_map, let_attrs_map);
-                let (at1, rhs) = self.create_stream_from_evaluation_plan(visitor, *e2.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, lhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e1.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
+                let (at1, rhs) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *e2.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 lhs.anti_join(visitor, &rhs, &at, &at1)
             }
             Project(vars, expr) => {
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *expr.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *expr.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 stream.projection(visitor, &at, &vars)
             }
             Extend(var1, var2, expr) => {
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *expr.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *expr.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 stream.equality(visitor, &at, &var1, &var2)
             }
             Filter(var, val, expr) => {
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *expr.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *expr.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 stream.filter(visitor, at.clone(), var, val)
             }
             NegFilter(var, val, expr) => {
-                let (at, stream) = self.create_stream_from_evaluation_plan(visitor, *expr.clone(), dedup, let_stream_map, let_attrs_map);
+                let (at, stream) = self.create_stream_from_evaluation_plan(
+                    visitor,
+                    *expr.clone(),
+                    dedup,
+                    let_stream_map,
+                    let_attrs_map,
+                );
                 stream.neg_filter(visitor, at.clone(), var, val)
             }
             Error(m) => {
@@ -485,36 +756,36 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
 
     fn get_stream(&self, plan: Expr) -> (Vec<String>, MonitorStream<G>) {
         if !self.stream_exists(plan.clone()) {
-            panic!("Attempting to use an uninitialised stream for {:?}", plan.clone())
+            panic!(
+                "Attempting to use an uninitialised stream for {:?}",
+                plan.clone()
+            )
         }
         self.stream_map.get(&plan.clone()).unwrap().clone()
     }
 }
 
-fn fv(args : Vec<Arg>) -> Vec<String> {
+fn fv(args: Vec<Arg>) -> Vec<String> {
     let mut free_vars = Vec::with_capacity(args.len());
     for arg in args {
         match arg {
             Cst(_) => {}
-            Var(x) => {
-                free_vars.push(x)
-            }
+            Var(x) => free_vars.push(x),
         }
     }
 
-    return free_vars.clone()
+    return free_vars.clone();
 }
 
-
 //True for Predicate without constants and without duplicates
-fn is_simple_mode(args : Vec<Arg>) -> bool {
+fn is_simple_mode(args: Vec<Arg>) -> bool {
     let mut duplicates = HashSet::with_capacity(args.len());
     let mut no_duplicate = true;
     let mut no_constant = true;
 
     for arg in args {
         match arg {
-            Cst(_) => {no_constant = false}
+            Cst(_) => no_constant = false,
             Var(x) => {
                 if duplicates.contains(&x) {
                     no_duplicate = false;
@@ -525,7 +796,7 @@ fn is_simple_mode(args : Vec<Arg>) -> bool {
         }
     }
 
-    return no_duplicate && no_constant
+    return no_duplicate && no_constant;
 }
 
 fn new_split_fact(f: &Formula) -> (String, Vec<Arg>) {
@@ -551,30 +822,34 @@ fn new_split_fact(f: &Formula) -> (String, Vec<Arg>) {
 //                      None => x := Some d
 //                      | Some v => if v=d then Some G else None
 
-fn match_vars(ts : Vec<Arg>, ds : Vec<Arg>) -> Option<HashMap<Arg, Arg>> {
-    let mut tmp : HashMap<Arg, Arg> = HashMap::with_capacity(ds.len());
+fn match_vars(ts: Vec<Arg>, ds: Vec<Arg>) -> Option<HashMap<Arg, Arg>> {
+    let mut tmp: HashMap<Arg, Arg> = HashMap::with_capacity(ds.len());
     return match match_vars_internal_iter(ts, ds, &mut tmp) {
         None => None,
-        Some(res) => Some(res.clone())
-    }
+        Some(res) => Some(res.clone()),
+    };
 }
 
-fn match_vars_internal_iter(ts : Vec<Arg>, ds : Vec<Arg>, mapping : &mut HashMap<Arg, Arg>) -> Option<&mut HashMap<Arg, Arg>>{
+fn match_vars_internal_iter(
+    ts: Vec<Arg>,
+    ds: Vec<Arg>,
+    mapping: &mut HashMap<Arg, Arg>,
+) -> Option<&mut HashMap<Arg, Arg>> {
     for i in 0..ds.len() {
         let t = ts[i].clone();
         let d = ds[i].clone();
 
         match t {
-            Var(xt) => {
-                match mapping.get(&Var(xt.clone())) {
-                    None => { mapping.insert(Var(xt), d); }
-                    Some(v) => {
-                        if v.clone() != d {
-                            return None;
-                        }
+            Var(xt) => match mapping.get(&Var(xt.clone())) {
+                None => {
+                    mapping.insert(Var(xt), d);
+                }
+                Some(v) => {
+                    if v.clone() != d {
+                        return None;
                     }
                 }
-            }
+            },
             Cst(_) => {
                 if t.clone() != d {
                     return None;
@@ -583,7 +858,7 @@ fn match_vars_internal_iter(ts : Vec<Arg>, ds : Vec<Arg>, mapping : &mut HashMap
         }
     }
 
-    return Some(mapping)
+    return Some(mapping);
 }
 
 fn assign_d_vars(f_args: Vec<Arg>, d_args: Vec<Constant>) -> Option<Vec<Constant>> {
@@ -591,22 +866,20 @@ fn assign_d_vars(f_args: Vec<Arg>, d_args: Vec<Constant>) -> Option<Vec<Constant
     let mut new_d_vars = vec![];
     for (f_arg, d_arg) in zip(f_args.iter(), d_args.iter()) {
         match f_arg {
-            Var(var_name) => {
-                match assignment.get(var_name) {
-                    None => {
-                        assignment.insert(var_name.to_string(), d_arg.clone());
-                        new_d_vars.push(d_arg.clone())
-                    }
-                    Some(v) => {
-                        if v!= d_arg {
-                            return None
-                        }
+            Var(var_name) => match assignment.get(var_name) {
+                None => {
+                    assignment.insert(var_name.to_string(), d_arg.clone());
+                    new_d_vars.push(d_arg.clone())
+                }
+                Some(v) => {
+                    if v != d_arg {
+                        return None;
                     }
                 }
-            }
+            },
             Cst(v) => {
                 if v != d_arg {
-                    return None
+                    return None;
                 }
             }
         }
@@ -627,23 +900,29 @@ fn get_f_vars(f_args: Vec<Arg>) -> Vec<String> {
 
 fn get_reordered_indices(pred_args: &mut Vec<Arg>, alpha_attrs: &Vec<String>) -> Vec<usize> {
     let mut indices = vec![];
-    let alpha_args: Vec<Arg> = alpha_attrs.iter().map(|attr| Var(attr.to_string())).collect();
+    let alpha_args: Vec<Arg> = alpha_attrs
+        .iter()
+        .map(|attr| Var(attr.to_string()))
+        .collect();
     for arg in alpha_args {
         let index = pred_args.iter().position(|a| arg == *a).unwrap();
         indices.push(index)
     }
-    return indices
+    return indices;
 }
 
-fn get_attributes(e: Expr, let_attrs_map: &mut HashMap<(String, Vec<String>), Vec<Arg>>) -> Vec<String> {
+fn get_attributes(
+    e: Expr,
+    let_attrs_map: &mut HashMap<(String, Vec<String>), Vec<Arg>>,
+) -> Vec<String> {
     let mut attributes = vec![];
     match e.clone() {
         EMPTY | FULL => return attributes,
         VarEquals(var, y) => {
             let_attrs_map.insert((var.clone(), vec![var.clone()]), vec![y]);
             attributes.push(var);
-            return attributes
-        },
+            return attributes;
+        }
         Expr::Fact(f_name, f_args) => {
             let f_vars = get_f_vars(f_args.clone());
 
@@ -667,7 +946,7 @@ fn get_attributes(e: Expr, let_attrs_map: &mut HashMap<(String, Vec<String>), Ve
                     let mut seen: HashMap<String, bool> = HashMap::new();
                     res_vars.retain(|x| seen.insert(x.to_string(), true).is_none());
 
-                    return res_vars
+                    return res_vars;
                 }
             }
 
@@ -678,44 +957,40 @@ fn get_attributes(e: Expr, let_attrs_map: &mut HashMap<(String, Vec<String>), Ve
                 }
             }
             attributes
-        },
-        Join(e1,e2) => {
+        }
+        Join(e1, e2) => {
             let lhs_attrs = get_attributes(*e1, let_attrs_map);
             let rhs_attrs = get_attributes(*e2, let_attrs_map);
-            let (attrs,_,_) = find_common_bound_variables1(lhs_attrs, rhs_attrs);
-            return attrs
-        },
-        UnionJoin(e1, e2)
-        | Antijoin(e1, e2) => {
+            let (attrs, _, _) = find_common_bound_variables1(lhs_attrs, rhs_attrs);
+            return attrs;
+        }
+        UnionJoin(e1, e2) | Antijoin(e1, e2) => {
             let lhs_attrs = get_attributes(*e1, let_attrs_map);
             let rhs_attrs = get_attributes(*e2, let_attrs_map);
-            let (attrs,_,_) = find_common_bound_variables(lhs_attrs, rhs_attrs);
-            return attrs
-        },
+            let (attrs, _, _) = find_common_bound_variables(lhs_attrs, rhs_attrs);
+            return attrs;
+        }
         Project(var, expr) => {
             let attrs = get_attributes(*expr, let_attrs_map);
-            let (_,new_attrs) = get_wanted_indices(&attrs, &var);
+            let (_, new_attrs) = get_wanted_indices(&attrs, &var);
             new_attrs
-        },
+        }
         Extend(_, var, e) => {
             let attrs = get_attributes(*e, let_attrs_map);
             let mut new_attrs = attrs.clone();
             new_attrs.push(var.clone());
             new_attrs
-        },
-        Filter(_,_,expr)
-        | NegFilter(_,_,expr)
-        | Expr::Next(expr,_)
-        | Expr::Prev(expr,_)
-        | Expr::Once(expr,_)
-        | Expr::Eventually(expr,_) => {
-            return get_attributes(*expr, let_attrs_map)
-        },
-        Expr::Since(_,expr,_)
-        | Expr::Until(_,expr,_) => {
+        }
+        Filter(_, _, expr)
+        | NegFilter(_, _, expr)
+        | Expr::Next(expr, _)
+        | Expr::Prev(expr, _)
+        | Expr::Once(expr, _)
+        | Expr::Eventually(expr, _) => return get_attributes(*expr, let_attrs_map),
+        Expr::Since(_, expr, _) | Expr::Until(_, expr, _) => {
             let rhs_attrs = get_attributes(*expr, let_attrs_map);
             rhs_attrs
-        },
+        }
         /*Expr::Aggregation(var, agg_f , term, group_by, expr) => {
             let attrs = get_attributes(*expr, let_attrs_map);
             let group_by_indices = get_group_by_indices(&attrs, &group_by);
@@ -730,11 +1005,11 @@ fn get_attributes(e: Expr, let_attrs_map: &mut HashMap<(String, Vec<String>), Ve
             let beta_attrs = get_attributes(*beta, let_attrs_map);
             beta_attrs
         }*/
-        _ => return attributes
+        _ => return attributes,
     }
 }
 
-fn split_f(f: Formula) -> (String,Vec<Arg>) {
+fn split_f(f: Formula) -> (String, Vec<Arg>) {
     let mut f_name = String::new();
     let mut f_args = vec![];
     match f {
@@ -742,7 +1017,7 @@ fn split_f(f: Formula) -> (String,Vec<Arg>) {
             f_name = n;
             f_args = args;
         }
-        _ => ()
+        _ => (),
     }
     (f_name, f_args)
 }
@@ -751,15 +1026,15 @@ fn split_f(f: Formula) -> (String,Vec<Arg>) {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use ::{timely};
+    use timely;
     use timely::dataflow::operators::capture::extract::Extract;
     use timely::dataflow::operators::Capture;
     use timely::dataflow::operators::Input;
     use timely::dataflow::operators::{Probe, UnorderedInput};
 
-    use ::{TS};
     use dataflow_constructor::types::default_options;
-    use dataflow_constructor::types::TimeFlowValues::{EOS, Timestamp};
+    use dataflow_constructor::types::TimeFlowValues::{Timestamp, EOS};
+    use TS;
 
     use parser::formula_syntax_tree::Constant::{Int, Str};
     use timeunits::TimeInterval;
@@ -769,36 +1044,38 @@ mod tests {
     #[test]
     fn inspect_expression() {
         let policy = "(P0(x2,x1) AND (NOT ((NOT P1()) UNTIL[0,21) ((P2() AND (NOT ((33 = 13) AND (NOT P1())))) AND (NOT (25 = 0))))))".to_string();
-        let times = vec![(0, 0), (1, 1), (2,2)];
+        let times = vec![(0, 0), (1, 1), (2, 2)];
 
-        let data = vec![
-            vec![]
-        ];
+        let data = vec![vec![]];
 
         println!("{:?}", parse_formula(&policy));
         let expected = vec![];
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected);
-
     }
 
     #[test]
     fn rand_formula() {
-        let times = vec![(0, 0), (1, 1), (2,2)];
+        let times = vec![(0, 0), (1, 1), (2, 2)];
         let policy = "(NOT (x2 = 24)) UNTIL(0,2) P1(x1,x2)".to_string();
 
         let data = vec![
             vec!["P3()"],
             vec!["P1(1,1)"],
-            vec!["P1(1,2)", "P1(1,24)", "P1(1,23)"]
+            vec!["P1(1,2)", "P1(1,24)", "P1(1,23)"],
         ];
 
         println!("{:?}", parse_formula(&policy));
         let expected = vec![
             (0, vec![Data(true, vec![Int(1), Int(1)])]),
-            (1, vec![Data(true, vec![Int(1), Int(2)]), Data(true, vec![Int(1), Int(23)])])
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(1), Int(2)]),
+                    Data(true, vec![Int(1), Int(23)]),
+                ],
+            ),
         ];
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected);
-
     }
 
     #[test]
@@ -808,40 +1085,28 @@ mod tests {
 
         println!("{:?}", parse_formula(&policy));
 
-
-        let times = vec![(0, 0), (1, 1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "(NOT (15 = 30)) SINCE(0,*) q(x,y)".to_string();
 
-        let data = vec![
-            vec!["p()"],
-            vec!["q(1,1)"],
-            vec!["p()"]
-        ];
+        let data = vec![vec!["p()"], vec!["q(1,1)"], vec!["p()"]];
 
         println!("{:?}", parse_formula(&policy));
-        let expected = vec![(2, vec![Data(true, vec![Int(1), Int(1)])]), ];
+        let expected = vec![(2, vec![Data(true, vec![Int(1), Int(1)])])];
         test_dataflow(policy, data.clone(), times.clone(), expected);
 
-
-        let times = vec![(0, 0), (1, 1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "(P3() AND (NOT (15 = 32)))".to_string();
 
-        let data = vec![
-            vec!["P3()"],
-            vec!["P3()"],
-            vec!["P3()"]
-        ];
+        let data = vec![vec!["P3()"], vec!["P3()"], vec!["P3()"]];
 
         println!("{:?}", parse_formula(&policy));
         let expected = vec![
             (0, vec![Data(true, vec![])]),
             (1, vec![Data(true, vec![])]),
-            (2, vec![Data(true, vec![])])
+            (2, vec![Data(true, vec![])]),
         ];
         test_dataflow(policy, data.clone(), times.clone(), expected);
-
     }
-
 
     #[test]
     fn base_stream_test() {
@@ -852,7 +1117,7 @@ mod tests {
             vec!["p(5, 3)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
         let policy = "p(x, x)".to_string();
 
         println!("{}", parse_formula(&policy));
@@ -871,7 +1136,7 @@ mod tests {
             vec!["p(5, 5)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "p(x, x)".to_string();
 
@@ -917,7 +1182,7 @@ mod tests {
             vec!["p(5, 3)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "p(y, x) AND (x = 3)".to_string();
 
@@ -951,7 +1216,7 @@ mod tests {
             vec!["p(5, 3)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "EXISTSy.p(y, x)".to_string();
 
@@ -972,7 +1237,7 @@ mod tests {
             vec!["p(1, 5, 3)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "EXISTSy,x.p(z,y, x)".to_string();
 
@@ -996,7 +1261,7 @@ mod tests {
             vec!["p(5, 3)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "p(x,y) AND (x=5)".to_string();
 
@@ -1007,8 +1272,6 @@ mod tests {
         ];
 
         test_dataflow(policy, data.clone(), times.clone(), expected);
-
-
 
         /*let data = vec![
             vec!["p(4, 3)"],
@@ -1037,10 +1300,10 @@ mod tests {
             vec!["p(4)", "q(5)"],
             vec!["p(6)", "q(8)"],
             vec!["p(8)"],
-            vec!["p(5)"]
+            vec!["p(5)"],
         ];
 
-        let times = vec![(0,0), (1,1), (2,2), (3,3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
         let policy = "NOT p(x) SINCE [0,*) q(x)".to_string();
         println!("{:?}", parse_formula(&policy.clone()));
         let expected = vec![
@@ -1053,38 +1316,24 @@ mod tests {
 
     #[test]
     fn random_formula_3() {
-        let data = vec![
-            vec!["P3()"],
-            vec!["P3()"],
-            vec!["P3()"]
-        ];
+        let data = vec![vec!["P3()"], vec!["P3()"], vec!["P3()"]];
 
-        let times = vec![(0,0), (1,1), (2,2)];
+        let times = vec![(0, 0), (1, 1), (2, 2)];
         let policy = "(PREVIOUS(0,40) P3()) AND (NOT (15 = 30))".to_string();
-        let expected = vec![
-            (1, vec![Data(true, vec![])]),
-            (2, vec![Data(true, vec![])]),
-        ];
+        let expected = vec![(1, vec![Data(true, vec![])]), (2, vec![Data(true, vec![])])];
         test_dataflow_unordered(policy, data.clone(), times, expected);
 
-        let times = vec![(0,0), (1,1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "(PREVIOUS[0,*) ((PREVIOUS(0,40) P3()) AND (NOT (15 = 30))))".to_string();
-        let expected = vec![
-            (2, vec![Data(true, vec![])]),
-            (3, vec![Data(true, vec![])]),
-        ];
+        let expected = vec![(2, vec![Data(true, vec![])]), (3, vec![Data(true, vec![])])];
         test_dataflow_unordered(policy, data, times, expected);
     }
 
     #[test]
     fn random_formula_3_1() {
-        let data = vec![
-            vec!["P3()"],
-            vec!["P3()"],
-            vec!["P3()"]
-        ];
+        let data = vec![vec!["P3()"], vec!["P3()"], vec!["P3()"]];
 
-        let times = vec![(0,0), (1,1), (2,2)];
+        let times = vec![(0, 0), (1, 1), (2, 2)];
         let policy = "P3() AND (NOT (15 = 30))".to_string();
         let expected = vec![
             (0, vec![Data(true, vec![])]),
@@ -1098,100 +1347,111 @@ mod tests {
     fn random_formula_3_2() {
         let data = vec![
             vec!["P7(1,1)", "P8(1,1,1,1)", "P5(1,1,1,1)", "P6(1,1,1)"],
-            vec!["P7(1,1)", "P8(1,1,1,1)", "P5(1,1,1,1)", "P6(1,1,1)", "P7(2,2)", "P8(2,2,2,2)", "P5(2,2,1,2)", "P6(2,1,1)"],
-            vec!["P5(1,1,1,1)", "P5(2,2,2,2)", "P5(3,3,3,3)"]
+            vec![
+                "P7(1,1)",
+                "P8(1,1,1,1)",
+                "P5(1,1,1,1)",
+                "P6(1,1,1)",
+                "P7(2,2)",
+                "P8(2,2,2,2)",
+                "P5(2,2,1,2)",
+                "P6(2,1,1)",
+            ],
+            vec!["P5(1,1,1,1)", "P5(2,2,2,2)", "P5(3,3,3,3)"],
         ];
 
-        let times = vec![(0,0), (1,1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "(P5(x1,x3,x4,x2) OR ( P6(x4,x3,x1) SINCE[0,*) (P7(x1,x3) SINCE[0,*) P8(x4,x3,x1,x2))))".to_string();
         let expected = vec![
             (0, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)])]),
-            (1, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
-                     Data(true, vec![Int(2), Int(2), Int(1), Int(2)]),
-                     Data(true, vec![Int(2), Int(2), Int(2), Int(2)])]),
-            (2, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
-                     Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
-                     Data(true, vec![Int(3), Int(3), Int(3), Int(3)])]),
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(1), Int(2)]),
+                    Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
+                ],
+            ),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
+                    Data(true, vec![Int(3), Int(3), Int(3), Int(3)]),
+                ],
+            ),
         ];
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected);
 
         let policy = "(NEXT[0,292) P5(x1,x3,x4,x2))".to_string();
         let expected = vec![
-            (0, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
-                     Data(true, vec![Int(2), Int(2), Int(1), Int(2)])]),
-            (1, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
-                     Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
-                     Data(true, vec![Int(3), Int(3), Int(3), Int(3)])]),
+            (
+                0,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(1), Int(2)]),
+                ],
+            ),
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
+                    Data(true, vec![Int(3), Int(3), Int(3), Int(3)]),
+                ],
+            ),
         ];
         test_dataflow_unordered(policy, data.clone(), times, expected);
 
-
-        let times = vec![(0,0), (1,1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "(NEXT[0,292) (P5(x1,x3,x4,x2) OR ( P6(x4,x3,x1) SINCE[0,*) (P7(x1,x3) SINCE[0,*) P8(x4,x3,x1,x2) ))))".to_string();
         let expected = vec![
-            (0, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
-                     Data(true, vec![Int(2), Int(2), Int(1), Int(2)]),
-                     Data(true, vec![Int(2), Int(2), Int(2), Int(2)])]),
-            (1, vec![Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
-                     Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
-                     Data(true, vec![Int(3), Int(3), Int(3), Int(3)])]),
+            (
+                0,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(1), Int(2)]),
+                    Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
+                ],
+            ),
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(2), Int(2)]),
+                    Data(true, vec![Int(3), Int(3), Int(3), Int(3)]),
+                ],
+            ),
         ];
         test_dataflow_unordered(policy, data.clone(), times, expected);
     }
 
     #[test]
     fn prev_test_our() {
-        let data = vec![
-            vec!["a(2)", "b(2)"],
-            vec!["a(4)"],
-            vec!["a(3)", "b(4)"]
-        ];
+        let data = vec![vec!["a(2)", "b(2)"], vec!["a(4)"], vec!["a(3)", "b(4)"]];
 
-        let times = vec![(0,9), (1,10), (2,11)];
+        let times = vec![(0, 9), (1, 10), (2, 11)];
         let policy = "PREVIOUS [1,1] (a(x) AND b(x))".to_string();
-        let expected = vec![
-            (1,
-             vec![
-                 Data(true, vec![Int(2)]),
-             ]
-            ),
-        ];
+        let expected = vec![(1, vec![Data(true, vec![Int(2)])])];
         test_dataflow_unordered(policy, data, times, expected);
     }
     #[test]
     fn prev_test_our2() {
-        let data = vec![
-            vec!["a(2)", "b(2)"],
-            vec!["a(4)"],
-            vec!["a(3)", "b(4)"]
-        ];
+        let data = vec![vec!["a(2)", "b(2)"], vec!["a(4)"], vec!["a(3)", "b(4)"]];
 
-        let times = vec![(0,0), (1,1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "PREVIOUS [0,*) a(x) AND b(x)".to_string();
-        let expected = vec![
-            (2,
-             vec![
-                 Data(true, vec![Int(4)]),
-             ]
-            ),
-        ];
+        let expected = vec![(2, vec![Data(true, vec![Int(4)])])];
         test_dataflow_unordered(policy, data, times, expected);
     }
 
     #[test]
     fn empty_join() {
-        let data = vec![
-            vec!["a()", "b()"],
-            vec!["a()"],
-            vec!["a()", "b()"]
-        ];
+        let data = vec![vec!["a()", "b()"], vec!["a()"], vec!["a()", "b()"]];
 
-        let times = vec![(0,0), (1,1), (2,2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
         let policy = "a() AND b()".to_string();
-        let expected = vec![
-            (0,vec![Data(true, vec![])]),
-            (2,vec![Data(true, vec![])]),
-        ];
+        let expected = vec![(0, vec![Data(true, vec![])]), (2, vec![Data(true, vec![])])];
         test_dataflow_unordered(policy, data, times, expected);
     }
 
@@ -1210,34 +1470,45 @@ mod tests {
             vec!["a()", "b()"],
         ];
 
-        let times = vec![(0,0), (1,1), (2,2), (3,3), (4,4), (5,5), (6,6), (7,7), (8,8), (9,9)];
+        let times = vec![
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (6, 6),
+            (7, 7),
+            (8, 8),
+            (9, 9),
+        ];
         let policy = "a() AND b()".to_string();
         let expected = vec![
-            (0,vec![Data(true, vec![])]),
-            (1,vec![Data(true, vec![])]),
-            (2,vec![Data(true, vec![])]),
-            (3,vec![Data(true, vec![])]),
-            (4,vec![Data(true, vec![])]),
-            (5,vec![Data(true, vec![])]),
-            (6,vec![Data(true, vec![])]),
-            (7,vec![Data(true, vec![])]),
-            (8,vec![Data(true, vec![])]),
-            (9,vec![Data(true, vec![])]),
+            (0, vec![Data(true, vec![])]),
+            (1, vec![Data(true, vec![])]),
+            (2, vec![Data(true, vec![])]),
+            (3, vec![Data(true, vec![])]),
+            (4, vec![Data(true, vec![])]),
+            (5, vec![Data(true, vec![])]),
+            (6, vec![Data(true, vec![])]),
+            (7, vec![Data(true, vec![])]),
+            (8, vec![Data(true, vec![])]),
+            (9, vec![Data(true, vec![])]),
         ];
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected.clone());
 
         let policy = "(ONCE[0,312] ((a() AND b())))".to_string();
         let expected = vec![
-            (0,vec![Data(true, vec![])]),
-            (1,vec![Data(true, vec![])]),
-            (2,vec![Data(true, vec![])]),
-            (3,vec![Data(true, vec![])]),
-            (4,vec![Data(true, vec![])]),
-            (5,vec![Data(true, vec![])]),
-            (6,vec![Data(true, vec![])]),
-            (7,vec![Data(true, vec![])]),
-            (8,vec![Data(true, vec![])]),
-            (9,vec![Data(true, vec![])]),
+            (0, vec![Data(true, vec![])]),
+            (1, vec![Data(true, vec![])]),
+            (2, vec![Data(true, vec![])]),
+            (3, vec![Data(true, vec![])]),
+            (4, vec![Data(true, vec![])]),
+            (5, vec![Data(true, vec![])]),
+            (6, vec![Data(true, vec![])]),
+            (7, vec![Data(true, vec![])]),
+            (8, vec![Data(true, vec![])]),
+            (9, vec![Data(true, vec![])]),
         ];
 
         println!("{:?}", parse_formula(&policy));
@@ -1253,27 +1524,45 @@ mod tests {
         ];
 
         let policy = "((NOT (ONCE[0,312] (a() AND b()))) SINCE[0,301) c(x2,x1))".to_string();
-        let times = vec![(0,0), (1,1), (2,2), (3,3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
         let expected = vec![
-            (0,vec![Data(true, vec![Int(1), Int(1)])]),
-            (1,vec![Data(true, vec![Int(2), Int(2)])]),
-            (4,vec![Data(true, vec![Int(3), Int(3)])]),
+            (0, vec![Data(true, vec![Int(1), Int(1)])]),
+            (1, vec![Data(true, vec![Int(2), Int(2)])]),
+            (4, vec![Data(true, vec![Int(3), Int(3)])]),
         ];
 
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected.clone());
 
-        let policy = "(ONCE(0,177) ((NOT (ONCE[0,312] (a() AND b()))) SINCE[0,301) c(x2,x1)))".to_string();
-        let times = vec![(0,0), (1,1), (2,2), (3,3), (4,4)];
+        let policy =
+            "(ONCE(0,177) ((NOT (ONCE[0,312] (a() AND b()))) SINCE[0,301) c(x2,x1)))".to_string();
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
         let expected = vec![
-            (1,vec![Data(true, vec![Int(1), Int(1)])]),
-            (2,vec![Data(true, vec![Int(1), Int(1)]), Data(true, vec![Int(2), Int(2)])]),
-            (3,vec![Data(true, vec![Int(1), Int(1)]), Data(true, vec![Int(2), Int(2)])]),
-            (4,vec![Data(true, vec![Int(1), Int(1)]), Data(true, vec![Int(2), Int(2)])]),
+            (1, vec![Data(true, vec![Int(1), Int(1)])]),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2)]),
+                ],
+            ),
+            (
+                3,
+                vec![
+                    Data(true, vec![Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2)]),
+                ],
+            ),
+            (
+                4,
+                vec![
+                    Data(true, vec![Int(1), Int(1)]),
+                    Data(true, vec![Int(2), Int(2)]),
+                ],
+            ),
         ];
 
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected.clone());
     }
-
 
     #[test]
     fn prev_test_our_3() {
@@ -1282,55 +1571,35 @@ mod tests {
             vec!["a(4)"],
             vec!["a(3)", "b(4)"],
             vec!["a(5)", "b(5)"],
-            vec!["a(1)", "b(7)"]
+            vec!["a(1)", "b(7)"],
         ];
 
-        let times = vec![(0,9), (1,10), (2,11), (3,12), (4,13)];
+        let times = vec![(0, 9), (1, 10), (2, 11), (3, 12), (4, 13)];
         let policy = "PREVIOUS [1,1] (a(x) AND b(x))".to_string();
         let expected = vec![
-            (1,
-             vec![
-                 Data(true, vec![Int(2)]),
-             ]
-            ),
-            (4,
-             vec![
-                 Data(true, vec![Int(5)]),
-             ]
-            ),
+            (1, vec![Data(true, vec![Int(2)])]),
+            (4, vec![Data(true, vec![Int(5)])]),
         ];
         test_dataflow_unordered(policy, data, times, expected);
     }
 
     #[test]
     fn prev_test_our4() {
-        let data = vec![
-            vec!["a(2)", "b(2)"],
-            vec!["a(4)"],
-            vec!["a(3)", "b(4)"]
-        ];
+        let data = vec![vec!["a(2)", "b(2)"], vec!["a(4)"], vec!["a(3)", "b(4)"]];
 
-        let times = vec![(0,0), (1,1), (2,2)];
+        let times = vec![(0, 0), (1, 1), (2, 2)];
         let policy = "PREVIOUS [0,*) a(x)".to_string();
         let expected = vec![
-            (1,
-             vec![
-                 Data(true, vec![Int(2)]),
-             ]
-            ),
-            (2,
-             vec![
-                 Data(true, vec![Int(4)]),
-             ]
-            ),
+            (1, vec![Data(true, vec![Int(2)])]),
+            (2, vec![Data(true, vec![Int(4)])]),
         ];
         test_dataflow_unordered(policy, data, times, expected);
     }
 
     #[test]
     fn prev_no_interval_multiple() {
-        let data = vec![vec!["b(2)"], vec!["b(5)"], vec!["a(2)"], ];
-        let times = vec![(0,0), (1,1), (2,2)];
+        let data = vec![vec!["b(2)"], vec!["b(5)"], vec!["a(2)"]];
+        let times = vec![(0, 0), (1, 1), (2, 2)];
         let policy = "PREVIOUS [0,*) b(x)".to_string();
 
         let expected = vec![
@@ -1339,8 +1608,6 @@ mod tests {
         ];
         test_dataflow_unordered(policy, data, times, expected);
     }
-
-
 
     #[test]
     fn filter_test_value_1() {
@@ -1351,7 +1618,7 @@ mod tests {
             vec!["p(5, 6)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "p(y, x) AND (x = 3)".to_string();
 
@@ -1384,15 +1651,13 @@ mod tests {
             vec!["p(6, 6)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "p(x, x) AND (x = 3)".to_string();
 
         println!("{}", parse_formula(&policy));
 
-        let expected = vec![
-            (1, vec![Data(true, vec![Int(3)])]),
-        ];
+        let expected = vec![(1, vec![Data(true, vec![Int(3)])])];
 
         test_dataflow(policy, data.clone(), times.clone(), expected);
 
@@ -1418,7 +1683,7 @@ mod tests {
             vec!["p(5, 3)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let policy = "p(x, y) AND (x = y)".to_string();
 
@@ -1447,12 +1712,18 @@ mod tests {
         //working example with constant and variable
         let ts = vec![Var("x".to_string())];
         let tuple = vec![Cst(Int(12))];
-        assert_eq!(Some(HashMap::from([(Var("x".to_string()), Cst(Int(12)))])), match_vars(ts, tuple));
+        assert_eq!(
+            Some(HashMap::from([(Var("x".to_string()), Cst(Int(12)))])),
+            match_vars(ts, tuple)
+        );
 
         // two variables that match
         let ts = vec![Var("x".to_string()), Var("x".to_string())];
         let tuple = vec![Cst(Int(12)), Cst(Int(12))];
-        assert_eq!(Some(HashMap::from([(Var("x".to_string()), Cst(Int(12)))])), match_vars(ts, tuple));
+        assert_eq!(
+            Some(HashMap::from([(Var("x".to_string()), Cst(Int(12)))])),
+            match_vars(ts, tuple)
+        );
 
         // two unmatching variables
         let ts = vec![Var("x".to_string()), Var("x".to_string())];
@@ -1462,12 +1733,33 @@ mod tests {
         // two vaiables that match
         let ts = vec![Var("x".to_string()), Var("x".to_string())];
         let tuple = vec![Cst(Str("xx".to_string())), Cst(Str("xx".to_string()))];
-        assert_eq!(Some(HashMap::from([(Var("x".to_string()), Cst(Str("xx".to_string())))])), match_vars(ts, tuple));
+        assert_eq!(
+            Some(HashMap::from([(
+                Var("x".to_string()),
+                Cst(Str("xx".to_string()))
+            )])),
+            match_vars(ts, tuple)
+        );
 
-
-        let ts = vec![Var("y".to_string()), Var("x".to_string()), Var("x".to_string()), Var("y".to_string())];
-        let tuple = vec![Cst(Str("ypsilon".to_string())), Cst(Int(12)), Cst(Int(12)), Cst(Str("ypsilon".to_string()))];
-        assert_eq!(Some(HashMap::from([(Var("y".to_string()), Cst(Str("ypsilon".to_string()))), (Var("x".to_string()), Cst(Int(12)))])), match_vars(ts, tuple));
+        let ts = vec![
+            Var("y".to_string()),
+            Var("x".to_string()),
+            Var("x".to_string()),
+            Var("y".to_string()),
+        ];
+        let tuple = vec![
+            Cst(Str("ypsilon".to_string())),
+            Cst(Int(12)),
+            Cst(Int(12)),
+            Cst(Str("ypsilon".to_string())),
+        ];
+        assert_eq!(
+            Some(HashMap::from([
+                (Var("y".to_string()), Cst(Str("ypsilon".to_string()))),
+                (Var("x".to_string()), Cst(Int(12)))
+            ])),
+            match_vars(ts, tuple)
+        );
     }
 
     fn test_dataflow(
@@ -1493,14 +1785,14 @@ mod tests {
                 let (input, stream) = scope.new_input::<String>();
 
                 let options = default_options();
-                let (_attrs, output) = create_dataflow(parse_formula(&policy), stream, time_stream, options);
+                let (_attrs, output) =
+                    create_dataflow(parse_formula(&policy), stream, time_stream, options);
 
                 let probe = output.probe();
                 output.capture_into(send);
 
-                (input, time_input,  probe)
+                (input, time_input, probe)
             });
-
 
             let next_epoch = times[0].0;
             input.advance_to(next_epoch);
@@ -1521,7 +1813,8 @@ mod tests {
             time_input.close();
             input.close();
             worker.step();
-        }).unwrap();
+        })
+        .unwrap();
 
         // Vector holding a tuple (timepoint, vector with data for each timestamp)
         let mut actual_res: Vec<_> = recv
@@ -1558,7 +1851,7 @@ mod tests {
             let set2: HashSet<Record> = tmp_res1.clone().into_iter().collect();
 
             if set1 != set2 || tmp_tp != tmp_tp1 {
-                return false
+                return false;
             }
         }
 
@@ -1601,33 +1894,43 @@ mod tests {
         //let graph = build_dependency_graph(&parse_formula(&policy));
         timely::execute(timely::Config::process(NUM_WORKERS), move |worker| {
             let send = send.lock().unwrap().clone();
-            let (mut input, cap, mut time_input, time_cap, _probe) = worker.dataflow::<usize, _, _>(|scope| {
-                let ((time_input, time_cap), time_stream) = scope.new_unordered_input::<TimeFlowValues>();
-                let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
-                let options = default_options();
-                let (_attrs, output) = create_dataflow(parse_formula(&policy), stream, time_stream, options);
+            let (mut input, cap, mut time_input, time_cap, _probe) = worker
+                .dataflow::<usize, _, _>(|scope| {
+                    let ((time_input, time_cap), time_stream) =
+                        scope.new_unordered_input::<TimeFlowValues>();
+                    let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
+                    let options = default_options();
+                    let (_attrs, output) =
+                        create_dataflow(parse_formula(&policy), stream, time_stream, options);
 
-                let probe = output.probe();
-                output.capture_into(send);
+                    let probe = output.probe();
+                    output.capture_into(send);
 
-                (input, input_cap, time_input, time_cap, probe)
-            });
+                    (input, input_cap, time_input, time_cap, probe)
+                });
 
             let _next_epoch = times[0].0;
             for round in 0usize..times.len() {
                 let next_epoch = times[round].0;
 
                 if worker.index() == 0 {
-                    time_input.session(cap.delayed(&next_epoch)).give(Timestamp(times[round].1));
+                    time_input
+                        .session(cap.delayed(&next_epoch))
+                        .give(Timestamp(times[round].1));
                     let data = input_data.get(round).unwrap_or(&Vec::new()).clone();
-                    input.session(cap.delayed(&next_epoch)).give_iterator(data.into_iter());
+                    input
+                        .session(cap.delayed(&next_epoch))
+                        .give_iterator(data.into_iter());
                 }
                 worker.step();
             }
             let new_prod = times.len();
-            input.session(cap.delayed(&new_prod)).give("<eos>".parse().unwrap());
+            input
+                .session(cap.delayed(&new_prod))
+                .give("<eos>".parse().unwrap());
             time_input.session(time_cap.delayed(&new_prod)).give(EOS);
-        }).unwrap();
+        })
+        .unwrap();
 
         // Vector holding a tuple (timepoint, vector with data for each timestamp)
         let mut actual_res: Vec<_> = recv
@@ -1787,7 +2090,7 @@ mod tests {
             vec!["p(7, 8)", "q(8, 8)"],
         ];
 
-        let times = vec![(0, 0), (1, 1), (2, 2), (3,3)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
 
         let policy = "x2 = 40".to_string();
 
@@ -1811,17 +2114,14 @@ mod tests {
             vec!["P0(3,3,3,3)"],
             vec!["P0(4,4,4,4)", "P0(5,5,5,5)"],
             vec!["P0(6,6,6,6)"],
-            vec!["P1(1,1,1,1,40,1,1,1)"]
+            vec!["P1(1,1,1,1,40,1,1,1)"],
         ];
-        let times = vec![(0, 0), (1, 1), (2, 2), (3,3), (4,4)];
+        let times = vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)];
 
         let expected = vec![];
 
         test_dataflow_unordered(policy, data, times.clone(), expected);
     }
-
-
-
 
     #[test]
     fn exists_conj_with_join_1() {
@@ -1855,8 +2155,20 @@ mod tests {
         let policy = "TRUE UNTIL [0, 1] q(x,y)".to_string();
 
         let expected = vec![
-            (0, vec![Data(true, vec![Int(3), Int(5)]), Data(true, vec![Int(5), Int(7)])]),
-            (1, vec![Data(true, vec![Int(5), Int(7)]), Data(true, vec![Int(8), Int(8)])]),
+            (
+                0,
+                vec![
+                    Data(true, vec![Int(3), Int(5)]),
+                    Data(true, vec![Int(5), Int(7)]),
+                ],
+            ),
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(5), Int(7)]),
+                    Data(true, vec![Int(8), Int(8)]),
+                ],
+            ),
             (2, vec![Data(true, vec![Int(8), Int(8)])]),
         ];
 
@@ -1866,7 +2178,13 @@ mod tests {
 
         let times = vec![(0, 10), (1, 20), (2, 30)];
         let expected = vec![
-            (0, vec![Data(true, vec![Int(5), Int(7)]), Data(true, vec![Int(8), Int(8)])]),
+            (
+                0,
+                vec![
+                    Data(true, vec![Int(5), Int(7)]),
+                    Data(true, vec![Int(8), Int(8)]),
+                ],
+            ),
             (1, vec![Data(true, vec![Int(8), Int(8)])]),
         ];
 
@@ -1899,11 +2217,22 @@ mod tests {
         println!("--------------------- Once and Join");
         let policy = "ONCE [0, 7] (A(a,b) AND B(b,c))".to_string();
         let expected = vec![
-            (0, vec![Data(true, vec![Int(1), Int(1), Int(2)])], ),
-            (1, vec![Data(true, vec![Int(1), Int(1), Int(2)]), Data(true, vec![Int(1), Int(2), Int(1)])]),
-            (2, vec![Data(true, vec![Int(1), Int(1), Int(2)]),
+            (0, vec![Data(true, vec![Int(1), Int(1), Int(2)])]),
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(2)]),
                     Data(true, vec![Int(1), Int(2), Int(1)]),
-                    Data(true, vec![Int(2), Int(2), Int(2)])]),
+                ],
+            ),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(2)]),
+                    Data(true, vec![Int(1), Int(2), Int(1)]),
+                    Data(true, vec![Int(2), Int(2), Int(2)]),
+                ],
+            ),
         ];
 
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected);
@@ -1929,7 +2258,13 @@ mod tests {
         let expected = vec![
             (0, vec![Data(true, vec![Int(1), Int(1), Int(2)])]),
             (1, vec![Data(true, vec![Int(1), Int(1), Int(2)])]),
-            (2, vec![Data(true, vec![Int(1), Int(1), Int(2)]), Data(true, vec![Int(2), Int(2), Int(2)])]),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(2)]),
+                    Data(true, vec![Int(2), Int(2), Int(2)]),
+                ],
+            ),
         ];
 
         test_dataflow_unordered(policy, data1.clone(), times.clone(), expected);
@@ -1944,11 +2279,18 @@ mod tests {
             vec!["A(1, 2)", "B(2, 1)"],
             vec!["B(2, 2)", "A(2, 2)", "C(1,1)"],
         ];
-        let policy = "(ONCE[0, 7] (A(x,y) AND B(y,z))) AND NOT (EVENTUALLY[0, 7] C(z, x))".to_string();
+        let policy =
+            "(ONCE[0, 7] (A(x,y) AND B(y,z))) AND NOT (EVENTUALLY[0, 7] C(z, x))".to_string();
         let expected = vec![
             (0, vec![Data(true, vec![Int(1), Int(1), Int(2)])]),
             (1, vec![Data(true, vec![Int(1), Int(1), Int(2)])]),
-            (2, vec![Data(true, vec![Int(1), Int(1), Int(2)]), Data(true, vec![Int(2), Int(2), Int(2)])]),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(1), Int(1), Int(2)]),
+                    Data(true, vec![Int(2), Int(2), Int(2)]),
+                ],
+            ),
         ];
 
         test_dataflow_unordered(policy, data.clone(), times.clone(), expected);
@@ -1962,14 +2304,24 @@ mod tests {
             vec!["a(2, 2)", "b(4, 5)"],
         ];
 
-        let times = vec![(0,9), (1,10), (2,11)];
+        let times = vec![(0, 9), (1, 10), (2, 11)];
         let policy = "(a(a,b) OR b(b,a))".to_string();
         let expected = vec![
-            (0, vec![Data(true, vec![Int(2), Int(20)]),
-                     Data(true, vec![Int(10), Int(20)])]),
+            (
+                0,
+                vec![
+                    Data(true, vec![Int(2), Int(20)]),
+                    Data(true, vec![Int(10), Int(20)]),
+                ],
+            ),
             (1, vec![Data(true, vec![Int(1), Int(2)])]),
-            (2, vec![Data(true, vec![Int(2), Int(2)]),
-                     Data(true, vec![Int(5), Int(4)])]),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(2), Int(2)]),
+                    Data(true, vec![Int(5), Int(4)]),
+                ],
+            ),
         ];
         test_dataflow_unordered(policy, data, times, expected);
     }
@@ -1982,15 +2334,30 @@ mod tests {
             vec!["a(2, 2)", "b(4, 5)"],
         ];
 
-        let times = vec![(0,9), (1,10), (2,11)];
+        let times = vec![(0, 9), (1, 10), (2, 11)];
         let policy = "(a(a,b) OR b(a,b))".to_string();
         let expected = vec![
-            (0, vec![Data(true, vec![Int(10), Int(20)]),
-                     Data(true, vec![Int(20), Int(2)])]),
-            (1, vec![Data(true, vec![Int(1), Int(2)]),
-                     Data(true, vec![Int(2), Int(1)])]),
-            (2, vec![Data(true, vec![Int(2), Int(2)]),
-                     Data(true, vec![Int(4), Int(5)])]),
+            (
+                0,
+                vec![
+                    Data(true, vec![Int(10), Int(20)]),
+                    Data(true, vec![Int(20), Int(2)]),
+                ],
+            ),
+            (
+                1,
+                vec![
+                    Data(true, vec![Int(1), Int(2)]),
+                    Data(true, vec![Int(2), Int(1)]),
+                ],
+            ),
+            (
+                2,
+                vec![
+                    Data(true, vec![Int(2), Int(2)]),
+                    Data(true, vec![Int(4), Int(5)]),
+                ],
+            ),
         ];
         test_dataflow_unordered(policy, data, times, expected);
     }
@@ -2019,19 +2386,22 @@ mod tests {
     fn wikipedia_case_study() {
         let x = "edit(user,0) AND ONCE[1,3] (edit(user,0) AND ONCE[1,3] edit(user,0))".to_string();
         let graph = parse_formula(&x); //generate_evaluation_plan(&parse_formula(&x));
-        let exp = build_conj(build_fact("edit", vec!["user", "0"]),
-                build_once(build_conj(
+        let exp = build_conj(
+            build_fact("edit", vec!["user", "0"]),
+            build_once(
+                build_conj(
                     build_fact("edit", vec!["user", "0"]),
                     build_once(
                         build_fact("edit", vec!["user", "0"]),
-                        TimeInterval::new(TS::FINITE(1), TS::FINITE(3)))
-                ), TimeInterval::new(TS::FINITE(1), TS::FINITE(3))
-            )
+                        TimeInterval::new(TS::FINITE(1), TS::FINITE(3)),
+                    ),
+                ),
+                TimeInterval::new(TS::FINITE(1), TS::FINITE(3)),
+            ),
         );
         assert_eq!(graph, exp);
         println!("{}", graph)
     }
-
 
     fn test_dataflow_unordered_timed(
         policy: String,
@@ -2052,32 +2422,41 @@ mod tests {
         //let time_execute = Instant::now();
         timely::execute(timely::Config::process(4), move |worker| {
             let send = send.lock().unwrap().clone();
-            let (mut input, cap, mut time_input, time_cap, _probe) = worker.dataflow::<usize, _, _>(|scope| {
-                let ((time_input, time_cap), time_stream) = scope.new_unordered_input::<TimeFlowValues>();
-                let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
-                let options = default_options();
-                let (_attrs, output) = create_dataflow(parse_formula(&policy), stream, time_stream, options);
+            let (mut input, cap, mut time_input, time_cap, _probe) = worker
+                .dataflow::<usize, _, _>(|scope| {
+                    let ((time_input, time_cap), time_stream) =
+                        scope.new_unordered_input::<TimeFlowValues>();
+                    let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
+                    let options = default_options();
+                    let (_attrs, output) =
+                        create_dataflow(parse_formula(&policy), stream, time_stream, options);
 
-                let probe = output.probe();
-                output.capture_into(send);
+                    let probe = output.probe();
+                    output.capture_into(send);
 
-                (input, input_cap, time_input, time_cap, probe)
-            });
+                    (input, input_cap, time_input, time_cap, probe)
+                });
 
             if worker.index() == 0 {
                 for round in 0usize..times.len() {
                     let next_epoch = times[round].0;
-                    time_input.session(time_cap.delayed(&next_epoch)).give(Timestamp(times[round].1));
+                    time_input
+                        .session(time_cap.delayed(&next_epoch))
+                        .give(Timestamp(times[round].1));
                     let data = input_data.get(round).unwrap_or(&Vec::new()).clone();
-                    input.session(cap.delayed(&next_epoch)).give_iterator(data.into_iter());
+                    input
+                        .session(cap.delayed(&next_epoch))
+                        .give_iterator(data.into_iter());
                     worker.step();
                 }
                 let new_prod = times.len();
                 time_input.session(time_cap.delayed(&new_prod)).give(EOS);
-                input.session(cap.delayed(&new_prod)).give("<eos>".parse().unwrap());
+                input
+                    .session(cap.delayed(&new_prod))
+                    .give("<eos>".parse().unwrap());
             }
-
-        }).unwrap();
+        })
+        .unwrap();
 
         let actual_res: Vec<_> = recv
             .extract()
@@ -2114,10 +2493,7 @@ mod tests {
         for (key, values) in actual {
             if let Some(exp_values) = expected.get(&key) {
                 if values.len() != exp_values.len() {
-                    println!(
-                        "Unequal number of records at Keys: ({})",
-                        key.clone()
-                    );
+                    println!("Unequal number of records at Keys: ({})", key.clone());
                     return false;
                 }
 

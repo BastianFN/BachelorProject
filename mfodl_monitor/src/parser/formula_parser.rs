@@ -3,11 +3,11 @@
 use nom::IResult::Done;
 
 use nom::{alphanumeric, digit, IResult};
-use Formula::{FormulaError};
+use Formula::FormulaError;
 
+use parser::formula_parser::Constant::{Int, Str};
 use parser::formula_syntax_tree::*;
 use timeunits::*;
-use parser::formula_parser::Constant::{Str, Int};
 
 /// formula       --> iff
 /// iff           --> implication '<->' implication
@@ -28,14 +28,11 @@ use parser::formula_parser::Constant::{Str, Int};
 ///                   'A' var '.' formula_l1 |
 ///                   p(arg+) | p() | eos
 
-
-
-
 // This is the public method to parse a formula.
 pub fn parse_fact(s: &str) -> (String, Vec<Constant>) {
     match cl(s) {
         Done(_i, o) => o,
-        _ => {("".to_string(), vec![])}
+        _ => ("".to_string(), vec![]),
     }
 }
 
@@ -76,7 +73,6 @@ named!(clean_empty_fact<&str, (String, Vec<Constant>)>,
         ((name.to_string(), vec![]))
     ))
 );
-
 
 pub fn parse_formula(s: &str) -> Formula {
     let tmp = s.clone();
@@ -232,7 +228,6 @@ named!(temp_or_until<&str, Formula>,
     ))
 );
 
-
 // until = formula_l1 {'<U>' formula_l1}
 named!(equals<&str, Formula>,
     ws!(do_parse!(
@@ -308,7 +303,6 @@ named!(next<&str, Formula>,
         (build_next(f, time_frame))
     ))
 );
-
 
 named!(always<&str, Formula>,
     ws!(do_parse!(
@@ -398,7 +392,6 @@ named!(base_value<&str, Formula>,
         (build_value())
     ))
 );
-
 
 named!(false_f<&str, Formula>,
     ws!(do_parse!(
@@ -505,7 +498,6 @@ named!(interval<&str, TimeInterval>,
     ))
 );
 
-
 named!(fin_interval<&str, TimeInterval>,
     ws!(do_parse!(
        open_paran: take!(1) >>
@@ -541,13 +533,13 @@ named!(inf_interval<&str, TimeInterval>,
 
 #[cfg(test)]
 mod tests {
-    use constants::{default_start_time, TEST_FACT, test_formula};
+    use constants::{default_start_time, test_formula, TEST_FACT};
     use parse_formula;
     use parser::formula_syntax_tree::Arg::{Cst, Var};
-    
-    use parser::formula_syntax_tree::*;
-    use parser::formula_syntax_tree::Constant::{Int, Str};
+
     use parser::formula_parser::{fin_interval, inf_interval, interval};
+    use parser::formula_syntax_tree::Constant::{Int, Str};
+    use parser::formula_syntax_tree::*;
 
     use timeunits::{TimeInterval, TS};
 
@@ -664,8 +656,10 @@ mod tests {
     fn once_basic() {
         let input = &format!("ONCE [0,1] {s}", s = TEST_FACT);
         let output = parse_formula(input);
-        let expected_output =
-            build_once(test_formula(None), TimeInterval::new(TS::new(0), TS::new(1)));
+        let expected_output = build_once(
+            test_formula(None),
+            TimeInterval::new(TS::new(0), TS::new(1)),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -673,13 +667,18 @@ mod tests {
     fn variable_patterns() {
         let input = &format!("(ONCE [0,1] A(x,y) AND B(y,z)) AND NOT EVENTUALLY [0,1] C(z,x)");
         let output = parse_formula(input);
-        let expected_output =
-        build_anticonj(
+        let expected_output = build_anticonj(
             build_conj(
-                build_once(build_fact("A", vec!["x", "y"]), TimeInterval::new(TS::new(0), TS::new(1))),
-                build_fact("B", vec!["y", "z"])
+                build_once(
+                    build_fact("A", vec!["x", "y"]),
+                    TimeInterval::new(TS::new(0), TS::new(1)),
+                ),
+                build_fact("B", vec!["y", "z"]),
             ),
-            build_eventually(build_fact("C", vec!["z", "x"]), TimeInterval::new(TS::new(0), TS::new(1)))
+            build_eventually(
+                build_fact("C", vec!["z", "x"]),
+                TimeInterval::new(TS::new(0), TS::new(1)),
+            ),
         );
         assert_eq!(expected_output, output);
     }
@@ -688,8 +687,10 @@ mod tests {
     fn next() {
         let input = &format!("NEXT [0,1] {s}", s = TEST_FACT);
         let output = parse_formula(input);
-        let expected_output =
-            build_next(test_formula(None), TimeInterval::new(TS::new(0), TS::new(1)));
+        let expected_output = build_next(
+            test_formula(None),
+            TimeInterval::new(TS::new(0), TS::new(1)),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -697,8 +698,10 @@ mod tests {
     fn prev() {
         let input = &format!("PREVIOUS [0,1] {s}", s = TEST_FACT);
         let output = parse_formula(input);
-        let expected_output =
-            build_prev(test_formula(None), TimeInterval::new(TS::new(0), TS::new(1)));
+        let expected_output = build_prev(
+            test_formula(None),
+            TimeInterval::new(TS::new(0), TS::new(1)),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -706,8 +709,10 @@ mod tests {
     fn eventually_basic() {
         let input = &format!("EVENTUALLY [0,1] {s}", s = TEST_FACT);
         let output = parse_formula(input);
-        let expected_output =
-            build_eventually(test_formula(None), TimeInterval::new(TS::new(0), TS::new(1)));
+        let expected_output = build_eventually(
+            test_formula(None),
+            TimeInterval::new(TS::new(0), TS::new(1)),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -835,7 +840,10 @@ mod tests {
     fn disjunction_exists() {
         let input = &format!("EXISTSx.{s} OR {s}", s = TEST_FACT);
         let output = parse_formula(input);
-        let expected_output = build_disj(build_exists(vec!["x"], test_formula(None)), test_formula(None));
+        let expected_output = build_disj(
+            build_exists(vec!["x"], test_formula(None)),
+            test_formula(None),
+        );
 
         assert_eq!(expected_output, output);
     }
@@ -883,7 +891,8 @@ mod tests {
         let input = &format!("NOT {s} AND NOT {s}", s = TEST_FACT);
 
         let output = parse_formula(input);
-        let expected_output = build_conj(build_not(test_formula(None)), build_not(test_formula(None)));
+        let expected_output =
+            build_conj(build_not(test_formula(None)), build_not(test_formula(None)));
 
         assert_eq!(expected_output, output);
     }
@@ -925,7 +934,10 @@ mod tests {
         let input = &format!("EXISTSx.{s} AND {s}", s = TEST_FACT);
 
         let output = parse_formula(input);
-        let expected_output = build_conj(build_exists(vec!["x"], test_formula(None)), test_formula(None));
+        let expected_output = build_conj(
+            build_exists(vec!["x"], test_formula(None)),
+            test_formula(None),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -934,7 +946,10 @@ mod tests {
         let input = &format!("EXISTSx.({s} AND {s})", s = TEST_FACT);
 
         let output = parse_formula(input);
-        let expected_output = build_exists(vec!["x"], build_conj(test_formula(None), test_formula(None)));
+        let expected_output = build_exists(
+            vec!["x"],
+            build_conj(test_formula(None), test_formula(None)),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -955,7 +970,10 @@ mod tests {
         let input = &format!("{s} AND EXISTS x.{s}", s = TEST_FACT);
 
         let output = parse_formula(input);
-        let expected_output = build_conj(test_formula(None), build_exists(vec!["x"], test_formula(None)));
+        let expected_output = build_conj(
+            test_formula(None),
+            build_exists(vec!["x"], test_formula(None)),
+        );
         assert_eq!(expected_output, output);
     }
 
@@ -984,7 +1002,10 @@ mod tests {
 
     #[test]
     fn brackets_test() {
-        let input = &format!("NOT ({s} AND {s}) AND EXISTSx.({s} AND NOT {s} AND EXISTSy.{s})", s = TEST_FACT);
+        let input = &format!(
+            "NOT ({s} AND {s}) AND EXISTSx.({s} AND NOT {s} AND EXISTSy.{s})",
+            s = TEST_FACT
+        );
 
         let output = parse_formula(input);
         let expected_output = build_conj(
@@ -1038,7 +1059,7 @@ mod tests {
 
         let expected = build_prev(
             build_fact("p", vec![variable1.clone()]),
-            TimeInterval::new(TS::FINITE(0), TS::INFINITY)
+            TimeInterval::new(TS::FINITE(0), TS::INFINITY),
         );
         let actual = parse_formula(input);
         assert_eq!(expected, actual);
@@ -1064,10 +1085,7 @@ mod tests {
         let input = &format!("(P({}) AND P({})) AND {}={}", x1, x2, x1, x2);
 
         let expected = build_conj(
-            build_conj(
-                build_fact("P", vec![x1]),
-                build_fact("P", vec![x2])
-        ),
+            build_conj(build_fact("P", vec![x1]), build_fact("P", vec![x2])),
             build_equals(x1, Var(x2.to_string())),
         );
         let actual = parse_formula(input);
@@ -1094,18 +1112,19 @@ mod tests {
 
     #[test]
     fn randy1() {
-        let input = &format!("(ONCE(0,177) ((NOT (ONCE[0,312] (P0() AND P1()))) SINCE[0,301) P2(x2,x1)))");
+        let input =
+            &format!("(ONCE(0,177) ((NOT (ONCE[0,312] (P0() AND P1()))) SINCE[0,301) P2(x2,x1)))");
 
         let expected = build_once(
-                build_neg_since(
-                    build_once(
-                        build_conj(
-                            build_fact("P0", vec![]),
-                            build_fact("P1", vec![])),
-                        TimeInterval::new(TS::new(0), TS::new(312))),
-                    build_fact("P2", vec!["x2", "x1"]),
-                    TimeInterval::new(TS::new(0), TS::new(300))
-                ), TimeInterval::new(TS::new(1), TS::new(176))
+            build_neg_since(
+                build_once(
+                    build_conj(build_fact("P0", vec![]), build_fact("P1", vec![])),
+                    TimeInterval::new(TS::new(0), TS::new(312)),
+                ),
+                build_fact("P2", vec!["x2", "x1"]),
+                TimeInterval::new(TS::new(0), TS::new(300)),
+            ),
+            TimeInterval::new(TS::new(1), TS::new(176)),
         );
         let actual = parse_formula(input);
         assert_eq!(expected, actual);
@@ -1204,15 +1223,32 @@ mod tests {
         println!("{:?}", actual);
     }
 
-
     #[test]
     fn nokia() {
         let input = "((ONCE [0,108000] EXISTSu.EXISTSv.insert(u,\'db2\',v,data))) OR EVENTUALLY[0,108000] (EXISTSu.EXISTSv.insert(u,\'db2\',v,data))".to_string();
         let lhs = "ONCE [0,108000] (EXISTSu.EXISTSv.insert(u,\'db2\',v,data))".to_string();
         let rhs = "EVENTUALLY[0,108000] (EXISTSu.EXISTSv.insert(u,\'db2\',v,data))".to_string();
 
-        let lhs_expected = build_once(build_exists(vec!["u"], build_exists(vec!["v"], build_fact("insert", vec!["u", "'db2'", "v", "data"]))), TimeInterval::new(TS::new(0), TS::new(108000)));
-        let rhs_expected = build_eventually(build_exists(vec!["u"], build_exists(vec!["v"], build_fact("insert", vec!["u", "'db2'", "v", "data"]))), TimeInterval::new(TS::new(0), TS::new(108000)));
+        let lhs_expected = build_once(
+            build_exists(
+                vec!["u"],
+                build_exists(
+                    vec!["v"],
+                    build_fact("insert", vec!["u", "'db2'", "v", "data"]),
+                ),
+            ),
+            TimeInterval::new(TS::new(0), TS::new(108000)),
+        );
+        let rhs_expected = build_eventually(
+            build_exists(
+                vec!["u"],
+                build_exists(
+                    vec!["v"],
+                    build_fact("insert", vec!["u", "'db2'", "v", "data"]),
+                ),
+            ),
+            TimeInterval::new(TS::new(0), TS::new(108000)),
+        );
 
         let lhs_actual = parse_formula(&lhs);
         assert_eq!(lhs_actual, lhs_expected);

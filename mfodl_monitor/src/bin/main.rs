@@ -1,31 +1,35 @@
 #![allow(dead_code)]
 
 extern crate mfodl_monitor;
+extern crate nom;
 extern crate rand;
 extern crate structopt;
 extern crate timely;
-extern crate nom;
 
-use std::collections::{HashMap};
+use std::cmp::max;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::{println, writeln};
-use std::cmp::max;
 
-use mfodl_monitor::dataflow_constructor::types::FlowValues::{Data};
-use mfodl_monitor::parser::formula_syntax_tree::{Constant};
+use mfodl_monitor::dataflow_constructor::types::FlowValues::Data;
+use mfodl_monitor::parser::formula_syntax_tree::Constant;
 use mfodl_monitor::{create_dataflow, parse_formula};
 use std::path::PathBuf;
 
-use structopt::StructOpt;
-use timely::dataflow::operators::capture::Extract;
-use timely::dataflow::operators::capture::Capture;
-use timely::dataflow::operators::{Probe, UnorderedInput};
-use mfodl_monitor::dataflow_constructor::types::{OperatorOptions, TimeFlowValues};
 use mfodl_monitor::dataflow_constructor::types::TimeFlowValues::Timestamp;
+use mfodl_monitor::dataflow_constructor::types::{OperatorOptions, TimeFlowValues};
+use structopt::StructOpt;
+use timely::dataflow::operators::capture::Capture;
+use timely::dataflow::operators::capture::Extract;
+use timely::dataflow::operators::{Probe, UnorderedInput};
 
-use mfodl_monitor::parser::csv_parser::{parse_file_to_segments, parser_extended_wrapper, ParserReturn, Segment};
+use mfodl_monitor::parser::csv_parser::{
+    parse_file_to_segments, parser_extended_wrapper, ParserReturn, Segment,
+};
+
+use mfodl_monitor::parser::json_parser::find_timestamp;
 
 // const MODE_VALS: &[&str] = &["order", "out_of_order"];
 
@@ -64,10 +68,15 @@ pub struct ProgArgs {
     /// Batched output: number of outputs grouped together when -o 2 is set
     #[structopt(short, long, default_value = "1")]
     batch_output: usize,
+
+    /// Timestamp to filter JSON data by
+    #[structopt(short = "t", long = "timestamp")]
+    timestamp: Option<u64>,
 }
 
 fn main() {
     let args = ProgArgs::from_args();
+    println!("ARGS: {:?}", args);
     let mut options = OperatorOptions::new();
 
     let policy = args.policy;
@@ -75,7 +84,8 @@ fn main() {
 
     options.set_workers(args.workers);
     options.set_output_file(args.output_file);
-    options.set_step(args.step);
+    // options.set_step(args.step);
+    options.set_step(1);
     options.set_output_batch(args.batch_output);
     options.set_deduplication(args.deduplication);
 
@@ -84,10 +94,9 @@ fn main() {
         _ => {
             println!("Passed out put mode is invalid!");
             3
-        },
+        }
     };
     options.set_output_mode(out_put_mode);
-
 
     // Check if policy is a file
     let new_policy = if let Ok(f) = File::open(policy.clone()) {
@@ -96,11 +105,11 @@ fn main() {
             res = res + &*line.unwrap()
         }
         res.to_string()
-    }else {
+    } else {
         policy
     };
 
-    let mut tp_to_ts : HashMap<usize, usize> = HashMap::with_capacity(8);
+    let mut tp_to_ts: HashMap<usize, usize> = HashMap::with_capacity(8);
 
     // println!("{} {:?}", policy.clone(), path_data.clone());
     let res = if let Some(path_data) = some_path_data {
@@ -136,33 +145,28 @@ fn main() {
                                             }
                                         } else if vals.len() == 2 {
                                             match vals[0] {
-                                                Constant::Int(x) => {
-                                                    match vals[1] {
-                                                        Constant::Int(y) => {
-                                                            out += &format!(" ({:?},{:?}) ", x, y);
-                                                        }
-                                                        _ => {}
+                                                Constant::Int(x) => match vals[1] {
+                                                    Constant::Int(y) => {
+                                                        out += &format!(" ({:?},{:?}) ", x, y);
                                                     }
-                                                }
+                                                    _ => {}
+                                                },
                                                 _ => {}
                                             }
                                         } else {
                                             out += "(";
-                                            for v in 0..vals.len()-1 {
+                                            for v in 0..vals.len() - 1 {
                                                 match vals[v] {
-                                                    Constant::Int(x) => {
-                                                        out += &format!("{:?},", x)
-                                                    }
+                                                    Constant::Int(x) => out += &format!("{:?},", x),
                                                     _ => {}
                                                 }
                                             }
-                                            match vals[vals.len()-1] {
+                                            match vals[vals.len() - 1] {
                                                 Constant::Int(x) => {
                                                     out += &format!("{:?})", x);
                                                 }
                                                 Constant::Str(_) => {}
                                             }
-
                                         }
                                     }
                                 }
@@ -182,7 +186,16 @@ fn main() {
     }
 }
 
-fn execute_from_stdin(policy: String, options: OperatorOptions) -> (Vec<(usize, Vec<mfodl_monitor::dataflow_constructor::types::FlowValues>)>, HashMap<usize, usize>) {
+fn execute_from_stdin(
+    policy: String,
+    options: OperatorOptions,
+) -> (
+    Vec<(
+        usize,
+        Vec<mfodl_monitor::dataflow_constructor::types::FlowValues>,
+    )>,
+    HashMap<usize, usize>,
+) {
     let (send, recv) = std::sync::mpsc::channel();
     let send = std::sync::Arc::new(std::sync::Mutex::new(send));
 
@@ -191,97 +204,93 @@ fn execute_from_stdin(policy: String, options: OperatorOptions) -> (Vec<(usize, 
 
     let options_ = options.clone();
 
-    timely::execute(timely::Config::process(options.get_workers()), move |worker| {
-        let mut threshold = 0;
-        let mut tp_to_ts : HashMap<usize, usize> = HashMap::with_capacity(8);
-        let send = send.lock().unwrap().clone();
-        let tp_send = tp_send.lock().unwrap().clone();
-        let (mut input, mut cap, mut time_input, mut time_cap,_probe) = worker.dataflow::<usize, _, _>(|scope| {
-            let ((time_input, time_cap), time_stream) = scope.new_unordered_input::<TimeFlowValues>();
-            let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
+    timely::execute(
+        timely::Config::process(options.get_workers()),
+        move |worker| {
+            let mut threshold = 0;
+            let mut tp_to_ts: HashMap<usize, usize> = HashMap::with_capacity(8);
+            let send = send.lock().unwrap().clone();
+            let tp_send = tp_send.lock().unwrap().clone();
+            let (mut input, mut cap, mut time_input, mut time_cap, _probe) = worker
+                .dataflow::<usize, _, _>(|scope| {
+                    let ((time_input, time_cap), time_stream) =
+                        scope.new_unordered_input::<TimeFlowValues>();
+                    let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
 
-            let (_attrs, output) = create_dataflow(parse_formula(&policy), stream, time_stream, options.clone());
+                    let (_attrs, output) = create_dataflow(
+                        parse_formula(&policy),
+                        stream,
+                        time_stream,
+                        options.clone(),
+                    );
 
-            let probe = output.probe();
-            output.capture_into(send);
+                    let probe = output.probe();
+                    output.capture_into(send);
 
-            (input, input_cap, time_input, time_cap, probe)
-        });
+                    (input, input_cap, time_input, time_cap, probe)
+                });
 
-        if worker.index() == 0 {
-            let mut current = 0;
-            let mut current_is_set = false;
+            if worker.index() == 0 {
+                let mut current = 0;
+                let mut current_is_set = false;
 
-            let mut current_segment = Vec::with_capacity(options.get_step());
-            for line in io::stdin().lines() {
-                match parser_extended_wrapper(line.unwrap()) {
-                    ParserReturn::Data(tp, ts, val) => {
-                        tp_to_ts.entry(tp).or_insert(ts);
-                        if current_is_set {
-                            if tp == current {
+                let mut current_segment = Vec::with_capacity(options.get_step());
+                for line in io::stdin().lines() {
+                    let line = line.expect("Error reading line from stdin");
+                    match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(json_value) => {
+                            if let Some(timestamp) = find_timestamp(&json_value) {
+                                let ts = timestamp as usize;
+                                time_input
+                                    .session(time_cap.delayed(&ts))
+                                    .give(Timestamp(ts));
+                                if !current_is_set {
+                                    current = ts;
+                                    current_is_set = true;
+                                }
+                                let val = json_value.to_string();
                                 if options.get_step() == 1 {
-                                    input.session(cap.delayed(&tp)).give(val.to_string());
+                                    input.session(cap.delayed(&ts)).give(val);
                                     worker.step();
                                 } else {
-                                    current_segment.push(val.to_string())
+                                    current_segment.push(val);
+                                    threshold = threshold + 1;
+                                    if threshold >= options.get_step() {
+                                        input
+                                            .session(cap.delayed(&ts))
+                                            .give_iterator(current_segment.into_iter());
+                                        worker.step();
+                                        threshold = 0;
+                                        // this is to avoid the vector being reallocated
+                                        current_segment = Vec::with_capacity(options.get_step());
+                                    }
                                 }
-                            } else {
-                                time_input.session(time_cap.delayed(&tp)).give(Timestamp(ts));
-                                threshold = threshold + current_segment.len();
-
-                                if options.get_step() == 1 {
-                                    input.session(cap.delayed(&tp)).give(val.to_string());
-                                } else {
-                                    input.session(cap.delayed(&tp)).give_iterator(current_segment.clone().into_iter());
-                                }
-
-                                current_segment.clear();
-                                current = tp;
-                                current_segment.push(val.to_string());
-                                worker.step();
-                            }
-                        } else {
-                            current = tp;
-                            current_is_set = true;
-                            time_input.session(time_cap.delayed(&current)).give(Timestamp(ts));
-
-                            if options.get_step() == 1 {
-                                input.session(cap.delayed(&tp)).give(val.to_string());
-                                worker.step();
-                            } else {
-                                current_segment.push(val.to_string())
                             }
                         }
+                        Err(e) => println!("JSON Parsing Error: {}", e),
                     }
-                    ParserReturn::Watermark(wm) => {
-                        threshold = threshold + current_segment.len();
-                        input.session(cap.delayed(&current)).give_iterator(current_segment.clone().into_iter());
-                        let t = if wm < 0 { 0 } else { wm as usize };
-                        cap.downgrade(&t);
-                        time_cap.downgrade(&t);
+
+                    if threshold >= options.get_step() {
                         worker.step();
-                        current_segment.clear();
-                    }
-                    ParserReturn::Error(s) => {
-                        println!("Parser Error: {}", s);
+                        threshold = 0;
                     }
                 }
 
-                if threshold >= options.get_step() {
-                    worker.step();
-                    threshold = 0;
+                let new_prod = current + 1;
+                time_input
+                    .session(cap.delayed(&new_prod))
+                    .give(TimeFlowValues::EOS);
+                input
+                    .session(cap.delayed(&new_prod))
+                    .give("<eos>".parse().unwrap());
+
+                for tp_ts in tp_to_ts {
+                    let _ = tp_send.send(tp_ts);
                 }
             }
-
-            let new_prod = current+1;
-            time_input.session(cap.delayed(&new_prod)).give(TimeFlowValues::EOS);
-            input.session(cap.delayed(&new_prod)).give("<eos>".parse().unwrap());
-
-            for tp_ts in tp_to_ts {
-                let _ = tp_send.send(tp_ts);
-            }
-        }
-    }).unwrap();
+        },
+    )
+    .unwrap();
 
     if options_.get_output_mode() == 0 {
         let mut tp_to_ts = HashMap::with_capacity(8);
@@ -298,10 +307,20 @@ fn execute_from_stdin(policy: String, options: OperatorOptions) -> (Vec<(usize, 
         return (res, tp_to_ts.clone());
     }
 
-    return (vec![], HashMap::new());
+    (vec![], HashMap::new())
 }
 
-fn execute_from_file(policy: String, path_data: PathBuf, options: OperatorOptions) -> (Vec<(usize, Vec<mfodl_monitor::dataflow_constructor::types::FlowValues>)>, HashMap<usize, usize>) {
+fn execute_from_file(
+    policy: String,
+    path_data: PathBuf,
+    options: OperatorOptions,
+) -> (
+    Vec<(
+        usize,
+        Vec<mfodl_monitor::dataflow_constructor::types::FlowValues>,
+    )>,
+    HashMap<usize, usize>,
+) {
     let (send, recv) = std::sync::mpsc::channel();
     let send = std::sync::Arc::new(std::sync::Mutex::new(send));
 
@@ -310,64 +329,83 @@ fn execute_from_file(policy: String, path_data: PathBuf, options: OperatorOption
 
     let options_ = options.clone();
 
-    timely::execute(timely::Config::process(options.get_workers()), move |worker| {
-        let mut threshold = 0;
-        let mut tp_to_ts : HashMap<usize, usize> = HashMap::with_capacity(8);
-        let send = send.lock().unwrap().clone();
-        let tp_send = tp_send.lock().unwrap().clone();
+    timely::execute(
+        timely::Config::process(options.get_workers()),
+        move |worker| {
+            let mut threshold = 0;
+            let mut tp_to_ts: HashMap<usize, usize> = HashMap::with_capacity(8);
+            let send = send.lock().unwrap().clone();
+            let tp_send = tp_send.lock().unwrap().clone();
 
-        let (mut input, mut cap, mut time_input, mut time_cap,_probe) = worker.dataflow::<usize, _, _>(|scope| {
-            let ((time_input, time_cap), time_stream) = scope.new_unordered_input::<TimeFlowValues>();
-            let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
+            let (mut input, mut cap, mut time_input, mut time_cap, _probe) = worker
+                .dataflow::<usize, _, _>(|scope| {
+                    let ((time_input, time_cap), time_stream) =
+                        scope.new_unordered_input::<TimeFlowValues>();
+                    let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
 
-            let (_attrs, output) = create_dataflow(parse_formula(&policy), stream, time_stream, options.clone());
+                    let (_attrs, output) = create_dataflow(
+                        parse_formula(&policy),
+                        stream,
+                        time_stream,
+                        options.clone(),
+                    );
 
-            let probe = output.probe();
-            output.capture_into(send);
+                    let probe = output.probe();
+                    output.capture_into(send);
 
-            (input, input_cap, time_input, time_cap, probe)
-        });
+                    (input, input_cap, time_input, time_cap, probe)
+                });
 
-        // Send data and step the workers
-        if worker.index() == 0 {
-            let segments = parse_file_to_segments(path_data.clone());
-            let mut max_wm = 0;
-            let mut max_tp = 0;
-            for segs in segments {
-                match segs {
-                    Segment::Epoch(wm) => {
-                        let t = if wm < 0 { 0 } else { wm as usize };
-                        time_cap.downgrade(&t);
-                        cap.downgrade(&t);
-                        worker.step();
-                        max_wm = t;
+            // Send data and step the workers
+            if worker.index() == 0 {
+                let segments = parse_file_to_segments(path_data.clone());
+                let mut max_wm = 0;
+                let mut max_tp = 0;
+                for segs in segments {
+                    match segs {
+                        Segment::Epoch(wm) => {
+                            let t = if wm < 0 { 0 } else { wm as usize };
+                            time_cap.downgrade(&t);
+                            cap.downgrade(&t);
+                            worker.step();
+                            max_wm = t;
+                        }
+                        Segment::Seg(tp, ts, val) => {
+                            tp_to_ts.entry(tp).or_insert(ts);
+                            max_tp = max(max_tp, tp);
+                            time_input
+                                .session(time_cap.delayed(&tp))
+                                .give(Timestamp(ts));
+                            threshold = threshold + val.len();
+                            input
+                                .session(cap.delayed(&tp))
+                                .give_iterator(val.into_iter());
+                            worker.step();
+                        }
                     }
-                    Segment::Seg(tp, ts, val) => {
-                        tp_to_ts.entry(tp).or_insert(ts);
-                        max_tp = max(max_tp, tp);
-                        time_input.session(time_cap.delayed(&tp)).give(Timestamp(ts));
-                        threshold = threshold + val.len();
-                        input.session(cap.delayed(&tp)).give_iterator(val.into_iter());
+
+                    if threshold >= options.get_step() {
                         worker.step();
+                        threshold = 0;
                     }
                 }
 
-                if threshold >= options.get_step() {
-                    worker.step();
-                    threshold = 0;
+                let new_prod = max(max_tp, max_wm) + 1;
+                time_input
+                    .session(cap.delayed(&new_prod))
+                    .give(TimeFlowValues::EOS);
+                input
+                    .session(cap.delayed(&new_prod))
+                    .give("<eos>".parse().unwrap());
+                worker.step();
+
+                for tp_ts in tp_to_ts {
+                    let _ = tp_send.send(tp_ts);
                 }
             }
-
-            let new_prod = max(max_tp, max_wm) + 1;
-            time_input.session(cap.delayed(&new_prod)).give(TimeFlowValues::EOS);
-            input.session(cap.delayed(&new_prod)).give("<eos>".parse().unwrap());
-            worker.step();
-
-            for tp_ts in tp_to_ts {
-                let _ = tp_send.send(tp_ts);
-            }
-        }
-    }).unwrap();
+        },
+    )
+    .unwrap();
 
     if options_.get_output_mode() == 0 {
         let mut tp_to_ts = HashMap::with_capacity(8);

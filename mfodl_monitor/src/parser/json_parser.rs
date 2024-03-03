@@ -20,7 +20,7 @@ fn extract_timestamp(json_data: &str) -> Result<Option<u64>> {
 }
 
 // Helper function to recursively search for a timestamp field in the JSON
-fn find_timestamp(value: &Value) -> Option<u64> {
+pub fn find_timestamp(value: &Value) -> Option<u64> {
     match value {
         Value::Object(map) => {
             for (k, v) in map {

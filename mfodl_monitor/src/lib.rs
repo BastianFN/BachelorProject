@@ -9,6 +9,7 @@ extern crate abomonation;
 extern crate serde;
 extern crate serde_json;
 extern crate tempfile;
+extern crate jq_rs;
 
 
 #[macro_use]

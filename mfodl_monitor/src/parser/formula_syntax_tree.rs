@@ -1,9 +1,9 @@
 use std::fmt;
 
 use constants::CONJ_NEG_ERROR;
+use parser::formula_syntax_tree::Constant::{Int, Str};
 use parser::formula_syntax_tree::Formula::*;
 use std::collections::{BTreeSet, HashSet};
-use parser::formula_syntax_tree::Constant::{Int, Str};
 
 use timeunits::*;
 
@@ -16,7 +16,7 @@ pub enum Formula {
 
     CstFact(String, Vec<Constant>),
     Fact(String, Vec<Arg>),
-    
+    JSONQuery(String),
     Not(Box<Formula>),
     Equals(String, Box<Arg>),
 
@@ -95,7 +95,7 @@ impl fmt::Display for Formula {
                 str.push('~');
                 str.push_str(&(*f).to_string())
             }
-            CstFact(name,args) => {
+            CstFact(name, args) => {
                 str.push_str(&name);
 
                 if !args.is_empty() {
@@ -112,6 +112,7 @@ impl fmt::Display for Formula {
                 }
             }
             Fact(name, args) => {
+                println!("args: {:?}, name: {:?}", args, name);
                 str.push_str(&name);
 
                 if !args.is_empty() {
@@ -126,6 +127,9 @@ impl fmt::Display for Formula {
                 } else {
                     str.push_str("()");
                 }
+            }
+            JSONQuery(name) => {
+                str.push_str(&name);
             }
             Once(lhs, time) => {
                 let mut tmp = String::new();
@@ -236,7 +240,7 @@ impl fmt::Display for Formula {
             }
             Eos => {
                 str.push_str("<eos>");
-            },
+            }
             VALUE => {
                 str.push_str("value");
             }
@@ -291,8 +295,10 @@ pub fn free_variables(f: Formula) -> BTreeSet<Arg> {
             let l = free_variables(*lhs);
             return l;
         }
-        Since(lhs, rhs, _time) | Until(lhs, rhs, _time)
-         | NegSince(lhs, rhs, _time) | NegUntil(lhs, rhs, _time)=> {
+        Since(lhs, rhs, _time)
+        | Until(lhs, rhs, _time)
+        | NegSince(lhs, rhs, _time)
+        | NegUntil(lhs, rhs, _time) => {
             let mut l = free_variables(*lhs);
             let mut r = free_variables(*rhs);
             l.append(&mut r);
@@ -325,7 +331,7 @@ pub fn free_variables(f: Formula) -> BTreeSet<Arg> {
     }
 }
 
-pub fn merge_variables(lhs : Vec<Arg>, rhs: Vec<Arg>) -> Vec<Arg> {
+pub fn merge_variables(lhs: Vec<Arg>, rhs: Vec<Arg>) -> Vec<Arg> {
     let mut result = lhs.clone();
     let mut lhs_string = HashSet::with_capacity(lhs.len());
     for l in lhs {
@@ -345,7 +351,7 @@ pub fn merge_variables(lhs : Vec<Arg>, rhs: Vec<Arg>) -> Vec<Arg> {
     result
 }
 
-pub fn merge_variables_string(lhs : Vec<String>, rhs: Vec<String>) -> Vec<String> {
+pub fn merge_variables_string(lhs: Vec<String>, rhs: Vec<String>) -> Vec<String> {
     let mut result = lhs.clone();
     for r in rhs {
         if !lhs.contains(&r.clone()) {
@@ -362,12 +368,15 @@ pub fn free_variables_original_order(f: Formula) -> Vec<Arg> {
         Fact(_name, args) => args.clone(),
         Next(lhs, _time) | Prev(lhs, _time) => free_variables_original_order(*lhs),
         Once(lhs, _time) | Eventually(lhs, _time) => free_variables_original_order(*lhs),
-        Since(_lhs, rhs, _time) | Until(_lhs, rhs, _time)
-        | NegSince(_lhs, rhs, _time) | NegUntil(_lhs, rhs, _time) => free_variables_original_order(*rhs),
-        Conj(lhs, rhs) | Disj(lhs, rhs) | AntiConj(lhs, rhs) => {
-            merge_variables(free_variables_original_order(*lhs), free_variables_original_order(*rhs))
-        }
-        CstFact(var, _)| Equals(var, _) => vec![Arg::Var(var)],
+        Since(_lhs, rhs, _time)
+        | Until(_lhs, rhs, _time)
+        | NegSince(_lhs, rhs, _time)
+        | NegUntil(_lhs, rhs, _time) => free_variables_original_order(*rhs),
+        Conj(lhs, rhs) | Disj(lhs, rhs) | AntiConj(lhs, rhs) => merge_variables(
+            free_variables_original_order(*lhs),
+            free_variables_original_order(*rhs),
+        ),
+        CstFact(var, _) | Equals(var, _) => vec![Arg::Var(var)],
         Exists(v, f) => {
             let mut l = free_variables_original_order(*f);
 
@@ -408,6 +417,14 @@ pub fn build_fact_args(name: &str, args: Vec<Arg>) -> Formula {
     Fact(name.to_string(), args)
 }
 
+pub fn build_fact_json(name: &str, args: Vec<String>) -> Formula {
+    let mut vec = Vec::new();
+    for v in args {
+        vec.push(Arg::Var(v.to_string()));
+    }
+    Fact(name.into(), vec)
+}
+
 pub fn build_fact_const(name: &str, args: Vec<Constant>) -> Formula {
     CstFact(name.to_string(), args)
 }
@@ -436,10 +453,8 @@ pub fn build_fact_int(name: &str, vs: Vec<i32>) -> Formula {
 
 pub fn build_not(f: Formula) -> Formula {
     match f.clone() {
-        Not(subf) => {
-            *subf
-        }
-        _ => Not(Box::new(f))
+        Not(subf) => *subf,
+        _ => Not(Box::new(f)),
     }
 }
 
@@ -533,20 +548,34 @@ pub fn build_prev(rhs: Formula, interval: TimeInterval) -> Formula {
 #[cfg(test)]
 mod tests {
     use parse_formula;
-    use parser::formula_syntax_tree::{Arg, free_variables_original_order, merge_variables};
+    use parser::formula_syntax_tree::{free_variables_original_order, merge_variables, Arg};
 
     #[test]
     fn test_merge_variables() {
         let lhs = vec![Arg::Var("y".to_string()), Arg::Var("x".to_string())];
         let rhs = vec![Arg::Var("x".to_string()), Arg::Var("y".to_string())];
-        assert_eq!(vec![Arg::Var("y".to_string()), Arg::Var("x".to_string())], merge_variables(lhs, rhs));
+        assert_eq!(
+            vec![Arg::Var("y".to_string()), Arg::Var("x".to_string())],
+            merge_variables(lhs, rhs)
+        );
     }
 
     #[test]
     fn test_merge_variables_1() {
         let lhs = vec![Arg::Var("y".to_string()), Arg::Var("x".to_string())];
-        let rhs = vec![Arg::Var("z".to_string()), Arg::Var("y".to_string()), Arg::Var("x".to_string())];
-        assert_eq!(vec![Arg::Var("y".to_string()), Arg::Var("x".to_string()), Arg::Var("z".to_string())], merge_variables(lhs, rhs));
+        let rhs = vec![
+            Arg::Var("z".to_string()),
+            Arg::Var("y".to_string()),
+            Arg::Var("x".to_string()),
+        ];
+        assert_eq!(
+            vec![
+                Arg::Var("y".to_string()),
+                Arg::Var("x".to_string()),
+                Arg::Var("z".to_string())
+            ],
+            merge_variables(lhs, rhs)
+        );
     }
 
     #[test]
@@ -560,13 +589,25 @@ mod tests {
     fn test_original_order1() {
         let formula = parse_formula(&"P() SINCE[0,1] (P2(x1) AND (x2 = 0))");
         let res = free_variables_original_order(formula);
-        assert_eq!(vec![Arg::Var("x1".to_string()), Arg::Var("x2".to_string())], res)
+        assert_eq!(
+            vec![Arg::Var("x1".to_string()), Arg::Var("x2".to_string())],
+            res
+        )
     }
 
     #[test]
     fn test_original_order2() {
         let formula = parse_formula(&"P() SINCE[0,1] (A(x,u,i) AND B(x,i,u,n,m))");
         let res = free_variables_original_order(formula);
-        assert_eq!(vec![Arg::Var("x".to_string()), Arg::Var("u".to_string()), Arg::Var("i".to_string()), Arg::Var("n".to_string()), Arg::Var("m".to_string())], res)
+        assert_eq!(
+            vec![
+                Arg::Var("x".to_string()),
+                Arg::Var("u".to_string()),
+                Arg::Var("i".to_string()),
+                Arg::Var("n".to_string()),
+                Arg::Var("m".to_string())
+            ],
+            res
+        )
     }
 }

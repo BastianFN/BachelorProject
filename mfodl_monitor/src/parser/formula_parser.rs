@@ -90,6 +90,16 @@ named!(formula<&str, Formula>,
     ))
 );
 
+// named!(json_fact<&str, Formula>,
+//     ws!(do_parse!(
+//         tag!("JSONFact") >>
+//         query: take_until!(" ") >> // Simplistic, consider a more robust method to capture jq queries
+//         json: rest >> // Again, simplistic. You'll need a proper way to parse JSON.
+//         (Formula::JSONFact(query.to_string(), serde_json::from_str(json).unwrap()))
+//     ))
+// );
+
+
 // iff = implication {'<->' implication}
 named!(iff<&str, Formula>,
     ws!(do_parse!(

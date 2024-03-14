@@ -11,6 +11,7 @@ pub enum Expr {
     FULL,
     EMPTY,
     Fact(String, Vec<Arg>),
+    JSONQuery(String),
 
     Not(Box<Expr>),
     // This is a table in the monitor corresponding to a single subformula
@@ -53,10 +54,7 @@ impl fmt::Display for Expr {
                 ));
             }
             VarEquals(var, x) => {
-                s.push_str(&format!(
-                    "VarEquals({var} = {})",
-                    x.to_string()
-                ));
+                s.push_str(&format!("VarEquals({var} = {})", x.to_string()));
             }
             Join(lhs, rhs) => {
                 s.push_str(&format!("Join({}, {})", lhs, rhs));
@@ -125,26 +123,34 @@ pub fn generate_evaluation_plan(f: &Formula) -> Expr {
     generate_boolean_evaluation_plan(f.clone())
 }
 
-pub fn optimize_evaluation_plan(plan : Expr) -> Expr {
+pub fn optimize_evaluation_plan(plan: Expr) -> Expr {
     optimize_cases(plan)
 }
 
-fn optimize_cases(plan : Expr) -> Expr {
+fn optimize_cases(plan: Expr) -> Expr {
+    println!("Optimizing {:?}", plan);
     match plan {
-        FULL | EMPTY | Expr::Fact(_,_) | VarEquals(_, _) | Extend(_, _, _)
-        | Filter(_, _, _) | NegFilter(_, _, _) | Expr::Equals(_,_) => plan,
+        FULL
+        | EMPTY
+        | Expr::Fact(_, _)
+        | Expr::JSONQuery(_)
+        | VarEquals(_, _)
+        | Extend(_, _, _)
+        | Filter(_, _, _)
+        | NegFilter(_, _, _)
+        | Expr::Equals(_, _) => plan,
         Expr::Next(lhs, interval) => {
             let new_lhs = optimize_cases(*lhs);
             match new_lhs {
                 EMPTY => EMPTY,
-                lhs => Expr::Next(Box::new(lhs), interval)
+                lhs => Expr::Next(Box::new(lhs), interval),
             }
         }
         Expr::Prev(lhs, interval) => {
             let new_lhs = optimize_cases(*lhs);
             match new_lhs {
                 EMPTY => EMPTY,
-                lhs => Expr::Prev(Box::new(lhs), interval)
+                lhs => Expr::Prev(Box::new(lhs), interval),
             }
         }
         Project(vals, rhs) => {
@@ -153,21 +159,21 @@ fn optimize_cases(plan : Expr) -> Expr {
             match new_rhs {
                 FULL => FULL,
                 EMPTY => EMPTY,
-                rhs => Project(vals, Box::new(rhs))
+                rhs => Project(vals, Box::new(rhs)),
             }
         }
         Expr::Once(lhs, interval) => {
             let new_lhs = optimize_cases(*lhs);
             match new_lhs {
                 EMPTY => EMPTY,
-                lhs => Expr::Once(Box::new(lhs), interval)
+                lhs => Expr::Once(Box::new(lhs), interval),
             }
         }
         Expr::Eventually(lhs, interval) => {
             let new_lhs = optimize_cases(*lhs);
             match new_lhs {
                 EMPTY => EMPTY,
-                lhs => Expr::Eventually(Box::new(lhs), interval)
+                lhs => Expr::Eventually(Box::new(lhs), interval),
             }
         }
         Join(lhs, rhs) => {
@@ -177,7 +183,10 @@ fn optimize_cases(plan : Expr) -> Expr {
                 (EMPTY, _) | (_, EMPTY) => EMPTY,
                 (FULL, FULL) => FULL,
                 (FULL, expr) | (expr, FULL) => expr,
-                (lhs, rhs) => { if lhs == rhs { return lhs; }
+                (lhs, rhs) => {
+                    if lhs == rhs {
+                        return lhs;
+                    }
                     Join(Box::new(lhs), Box::new(rhs))
                 }
             }
@@ -191,7 +200,7 @@ fn optimize_cases(plan : Expr) -> Expr {
                 (lhs, EMPTY) => lhs,
                 (EMPTY, _) => EMPTY,
                 (_, FULL) => EMPTY,
-                (lhs, rhs) => Antijoin(Box::new(lhs), Box::new(rhs))
+                (lhs, rhs) => Antijoin(Box::new(lhs), Box::new(rhs)),
             }
         }
         UnionJoin(lhs, rhs) => {
@@ -202,7 +211,9 @@ fn optimize_cases(plan : Expr) -> Expr {
                 (EMPTY, EMPTY) => EMPTY,
                 (expr, EMPTY) | (EMPTY, expr) => expr,
                 (lhs, rhs) => {
-                    if lhs == rhs { lhs } else {
+                    if lhs == rhs {
+                        lhs
+                    } else {
                         UnionJoin(Box::new(lhs), Box::new(rhs))
                     }
                 }
@@ -213,9 +224,15 @@ fn optimize_cases(plan : Expr) -> Expr {
             let new_rhs = optimize_cases(*rhs);
             match (new_lhs, new_rhs) {
                 (_, EMPTY) => EMPTY,
-                (EMPTY, rhs) => if interval.get_raw_start() == 0 { rhs } else { EMPTY },
+                (EMPTY, rhs) => {
+                    if interval.get_raw_start() == 0 {
+                        rhs
+                    } else {
+                        EMPTY
+                    }
+                }
                 (FULL, rhs) => Expr::Once(Box::new(rhs), interval),
-                (lhs, rhs) => Expr::Since(Box::new(lhs), Box::new(rhs), interval)
+                (lhs, rhs) => Expr::Since(Box::new(lhs), Box::new(rhs), interval),
             }
         }
         Expr::Until(lhs, rhs, interval) => {
@@ -223,9 +240,15 @@ fn optimize_cases(plan : Expr) -> Expr {
             let new_rhs = optimize_cases(*rhs);
             match (new_lhs, new_rhs) {
                 (_, EMPTY) => EMPTY,
-                (EMPTY, rhs) => if interval.get_raw_start() == 0 { rhs } else { EMPTY },
+                (EMPTY, rhs) => {
+                    if interval.get_raw_start() == 0 {
+                        rhs
+                    } else {
+                        EMPTY
+                    }
+                }
                 (FULL, rhs) => Expr::Eventually(Box::new(rhs), interval),
-                (lhs, rhs) => Expr::Until(Box::new(lhs), Box::new(rhs), interval)
+                (lhs, rhs) => Expr::Until(Box::new(lhs), Box::new(rhs), interval),
             }
         }
         Expr::NegSince(lhs, rhs, interval) => {
@@ -233,8 +256,14 @@ fn optimize_cases(plan : Expr) -> Expr {
             let new_rhs = optimize_cases(*rhs);
             match (new_lhs, new_rhs) {
                 (EMPTY, EMPTY) | (FULL, EMPTY) => EMPTY,
-                (FULL, rhs) => if interval.get_raw_start() == 0 {rhs} else { EMPTY },
-                (lhs, rhs) => Expr::NegSince(Box::new(lhs), Box::new(rhs), interval)
+                (FULL, rhs) => {
+                    if interval.get_raw_start() == 0 {
+                        rhs
+                    } else {
+                        EMPTY
+                    }
+                }
+                (lhs, rhs) => Expr::NegSince(Box::new(lhs), Box::new(rhs), interval),
             }
         }
         Expr::NegUntil(lhs, rhs, interval) => {
@@ -242,28 +271,33 @@ fn optimize_cases(plan : Expr) -> Expr {
             let new_rhs = optimize_cases(*rhs);
             match (new_lhs, new_rhs) {
                 (EMPTY, EMPTY) | (FULL, EMPTY) => EMPTY,
-                (FULL, rhs) => if interval.get_raw_start() == 0 {rhs} else { EMPTY },
-                (lhs, rhs) => Expr::NegUntil(Box::new(lhs), Box::new(rhs), interval)
+                (FULL, rhs) => {
+                    if interval.get_raw_start() == 0 {
+                        rhs
+                    } else {
+                        EMPTY
+                    }
+                }
+                (lhs, rhs) => Expr::NegUntil(Box::new(lhs), Box::new(rhs), interval),
             }
         }
-        _ => {Error("Unhandled Case in optimize cases".to_string())}
+        _ => Error("Unhandled Case in optimize cases".to_string()),
     }
 }
-
 
 fn generate_boolean_evaluation_plan(f: Formula) -> Expr {
     match f.clone() {
         True => FULL,
         False => EMPTY,
         Formula::Fact(_, _) => build_assignment(f),
-        Formula::Not(subf) => {
-            match *subf.clone() {
-                FormulaError(_) => Error(format!("Error while generating an evaluation plan for {}", f.to_string())),
-                _ => {
-                    build_assignment(*subf)
-                }
-            }
-        }
+        Formula::JSONQuery(_) => build_assignment(f),
+        Formula::Not(subf) => match *subf.clone() {
+            FormulaError(_) => Error(format!(
+                "Error while generating an evaluation plan for {}",
+                f.to_string()
+            )),
+            _ => build_assignment(*subf),
+        },
         Conj(lhs, rhs) => {
             let fv = free_variables(*lhs.clone());
             //let org_fv = free_variables_original_order(*lhs.clone());
@@ -273,7 +307,7 @@ fn generate_boolean_evaluation_plan(f: Formula) -> Expr {
                     //println!("Build equals in conj {:?}", var);
                     let is_data = match *val.clone() {
                         Arg::Cst(_) => true,
-                        Arg::Var(_) => false
+                        Arg::Var(_) => false,
                     };
 
                     if fv.contains(&Arg::Var(var.clone())) && is_data {
@@ -289,16 +323,14 @@ fn generate_boolean_evaluation_plan(f: Formula) -> Expr {
                             }
                         }
                     }
-                },
+                }
                 _ => {
                     let rhs_expr = build_assignment(*rhs);
                     build_join(lhs_expr, rhs_expr)
                 }
             }
         }
-        Formula::Equals(var, val) => {
-            build_var_equals(var, *val)
-        }
+        Formula::Equals(var, val) => build_var_equals(var, *val),
         Disj(lhs, rhs) => {
             let lhs_expr = build_assignment(*lhs);
             let rhs_expr = build_assignment(*rhs);
@@ -352,7 +384,10 @@ fn generate_boolean_evaluation_plan(f: Formula) -> Expr {
             let subf_expr = build_assignment(*subf);
             build_neg_projection(var, subf_expr)
         }
-        _ => Error(format!("Unrecognised formula for boolean evaluation plan generation: {:?}", f)),
+        _ => Error(format!(
+            "Unrecognised formula for boolean evaluation plan generation: {:?}",
+            f
+        )),
     }
 }
 
@@ -399,17 +434,17 @@ fn build_neg_until(lhs: Expr, rhs: Expr, interval: TimeInterval) -> Expr {
     Expr::NegUntil(Box::new(lhs), Box::new(rhs), interval)
 }
 
-fn build_once(lhs: Expr, interval : TimeInterval) -> Expr {
+fn build_once(lhs: Expr, interval: TimeInterval) -> Expr {
     match lhs.clone() {
         EMPTY => EMPTY,
-        _ => Expr::Once(Box::new(lhs), interval)
+        _ => Expr::Once(Box::new(lhs), interval),
     }
 }
 
-fn build_eventually(lhs: Expr, interval : TimeInterval) -> Expr {
+fn build_eventually(lhs: Expr, interval: TimeInterval) -> Expr {
     match lhs.clone() {
         EMPTY => EMPTY,
-        _ => Expr::Eventually(Box::new(lhs), interval)
+        _ => Expr::Eventually(Box::new(lhs), interval),
     }
 }
 
@@ -435,16 +470,17 @@ pub fn build_assignment(f: Formula) -> Expr {
         True => FULL,
         False => EMPTY,
         Formula::Fact(x, y) => Expr::Fact(x, y),
+        Formula::JSONQuery(query) => Expr::JSONQuery(query),
         Formula::Not(lhs) => {
             let expr_lhs = build_assignment(*lhs);
             Expr::Not(Box::new(expr_lhs))
-        },
+        }
         Formula::Equals(x, y) => build_expr_equals(x, *y),
         Conj(lhs, rhs) => {
             let expr_lhs = build_assignment(*lhs);
             let expr_rhs = build_assignment(*rhs);
             build_join(expr_lhs, expr_rhs)
-        },
+        }
         Disj(lhs, rhs) => {
             let expr_lhs = build_assignment(*lhs);
             let expr_rhs = build_assignment(*rhs);
@@ -458,7 +494,7 @@ pub fn build_assignment(f: Formula) -> Expr {
         Exists(vals, rhs) => {
             let expr_rhs = build_assignment(*rhs);
             build_neg_projection(vals, expr_rhs)
-        },
+        }
         Formula::Since(lhs, rhs, interval) => {
             let expr_lhs = build_assignment(*lhs);
             let expr_rhs = build_assignment(*rhs);
@@ -495,19 +531,19 @@ pub fn build_assignment(f: Formula) -> Expr {
             let expr_lhs = build_assignment(*lhs);
             build_prev(expr_lhs, interval)
         }
-        _ => {Error("build assignment missing case".to_string())}
+        _ => Error("build assignment missing case".to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use constants::test_formula;
     use parse_formula;
-    use super::*;
     use parser::formula_syntax_tree;
-    use timeunits::TS;
     use parser::formula_syntax_tree::Arg::Cst;
-    use parser::formula_syntax_tree::Constant::{Int};
+    use parser::formula_syntax_tree::Constant::Int;
+    use timeunits::TS;
 
     fn test_bool_formula(f: Formula, expected: Expr) {
         let actual = generate_evaluation_plan(&f);
@@ -529,9 +565,8 @@ mod tests {
         let expected = build_since(
             build_assignment(build_fact("P0", vec![])),
             build_assignment(build_equals("x2", Cst(Int(0)))),
-            TimeInterval::new(TS::new(0), TS::new(10))
+            TimeInterval::new(TS::new(0), TS::new(10)),
         );
-
 
         test_bool_formula(f, expected);
     }
@@ -552,10 +587,7 @@ mod tests {
 
         let f = build_conj(lhs.clone(), rhs.clone());
 
-        let expected = build_join(
-            build_assignment(lhs),
-            build_assignment(rhs),
-        );
+        let expected = build_join(build_assignment(lhs), build_assignment(rhs));
 
         test_bool_formula(f, expected)
     }
@@ -568,11 +600,7 @@ mod tests {
 
         let f = build_conj(lhs.clone(), rhs.clone());
 
-        let expected = build_filter(
-            "x".to_string(),
-            Cst(Int(5)),
-            build_assignment(lhs),
-        );
+        let expected = build_filter("x".to_string(), Cst(Int(5)), build_assignment(lhs));
 
         test_bool_formula(f, expected)
     }
@@ -602,10 +630,7 @@ mod tests {
 
         let f = build_disj(lhs.clone(), rhs.clone());
 
-        let expected = build_union(
-            build_assignment(lhs),
-            build_assignment(rhs),
-        );
+        let expected = build_union(build_assignment(lhs), build_assignment(rhs));
 
         test_bool_formula(f, expected)
     }
@@ -627,10 +652,7 @@ mod tests {
 
         let f = build_conj(lhs.clone(), build_not(rhs.clone()));
 
-        let expected = build_antijoin(
-            build_assignment(lhs),
-            build_assignment(rhs),
-        );
+        let expected = build_antijoin(build_assignment(lhs), build_assignment(rhs));
 
         test_bool_formula(f, expected);
     }
@@ -654,7 +676,6 @@ mod tests {
 
         test_bool_formula(f, expected);
     }
-
 
     #[test]
     fn neg_since_plan() {
@@ -717,10 +738,8 @@ mod tests {
     fn prev_one_seven() {
         let rhs = test_formula(Some(vec![2]));
 
-        let f = formula_syntax_tree::build_prev(
-            rhs.clone(),
-            TimeInterval::new(TS::new(1), TS::new(7)),
-        );
+        let f =
+            formula_syntax_tree::build_prev(rhs.clone(), TimeInterval::new(TS::new(1), TS::new(7)));
 
         let expected = build_prev(
             build_assignment(rhs),
@@ -729,7 +748,6 @@ mod tests {
 
         test_bool_formula(f, expected);
     }
-
 
     #[test]
     fn next_zero_inf() {
@@ -748,10 +766,8 @@ mod tests {
     #[test]
     fn next_one_seven() {
         let rhs = test_formula(Some(vec![2]));
-        let f = formula_syntax_tree::build_next(
-            rhs.clone(),
-            TimeInterval::new(TS::new(1), TS::new(7)),
-        );
+        let f =
+            formula_syntax_tree::build_next(rhs.clone(), TimeInterval::new(TS::new(1), TS::new(7)));
         let expected = build_next(
             build_assignment(rhs),
             TimeInterval::new(TS::new(1), TS::new(7)),
@@ -759,15 +775,12 @@ mod tests {
         test_bool_formula(f, expected);
     }
 
-
     #[test]
     fn once_plan() {
         let rhs = test_formula(Some(vec![2]));
 
-        let f = formula_syntax_tree::build_once(
-            rhs.clone(),
-            TimeInterval::new(TS::new(1), TS::new(5)),
-        );
+        let f =
+            formula_syntax_tree::build_once(rhs.clone(), TimeInterval::new(TS::new(1), TS::new(5)));
 
         let expected = build_once(
             build_assignment(rhs),
@@ -800,9 +813,8 @@ mod tests {
         let rhs = build_fact("B", vec!["b", "c"]);
         let con = build_conj(lhs.clone(), rhs.clone());
         let f = formula_syntax_tree::build_once(
-                build_conj(
-                    lhs.clone(), rhs.clone()
-                ), TimeInterval::new(TS::new(0), TS::new(7))
+            build_conj(lhs.clone(), rhs.clone()),
+            TimeInterval::new(TS::new(0), TS::new(7)),
         );
 
         let expected = build_once(

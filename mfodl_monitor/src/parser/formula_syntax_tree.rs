@@ -112,7 +112,6 @@ impl fmt::Display for Formula {
                 }
             }
             Fact(name, args) => {
-                println!("args: {:?}, name: {:?}", args, name);
                 str.push_str(&name);
 
                 if !args.is_empty() {

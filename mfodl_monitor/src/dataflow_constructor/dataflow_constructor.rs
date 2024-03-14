@@ -32,6 +32,9 @@ use dataflow_constructor::operators::{
 };
 use parser::formula_syntax_tree::Constant::Str;
 
+use crate::parse_json_query;
+use crate::process_json_query;
+
 type MonitorStream<G> = Stream<G, Record>;
 type DataStream<G> = Stream<G, String>;
 type TimeStream<G> = Stream<G, TimeFlowValues>;
@@ -55,16 +58,20 @@ pub fn create_dataflow<G: Scope<Timestamp = usize>>(
         time_stream,
     };
 
+    println!("Policy {:?}", policy);
+
     let mut visitor = 0;
     let plan = generate_evaluation_plan(&policy.clone());
     let optimized_plan = optimize_evaluation_plan(plan.clone());
-    //println!("Original  plan {:?}", plan);
-    //println!("Optimized plan {:?}", optimized_plan);
+    println!("Original  plan {:?}", plan);
+    println!("Optimized plan {:?}", optimized_plan);
     dataflow_constructor.create_stream(
         &mut visitor,
         optimized_plan.clone(),
         options.get_deduplication(),
     );
+
+    println!("Stream ma");
 
     if dataflow_constructor.stream_exists(optimized_plan.clone()) {
         let (tmp_str, tmp_stream) = dataflow_constructor.get_stream(optimized_plan.clone());
@@ -88,12 +95,15 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         f: &Formula,
     ) -> (Vec<String>, MonitorStream<G>) {
         *visitor = visitor.clone() + 1;
+        println!("In create base stream {:?}", f);
         let (f_name, args) = new_split_fact(f);
         let exchange = Exchange::new(move |event| calculate_hash(event));
 
         let simple_mode = is_simple_mode(args.clone());
         let f_vars = fv(args.clone());
         let f_vars_args: Vec<Arg> = args.clone();
+
+        let formula_clone = f.clone();
 
         let output = if !simple_mode {
             self.data_stream
@@ -111,7 +121,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                             let name_copy = f_name.clone();
                             let f_vars_args_copy = f_vars_args.clone();
                             data.iter().for_each(|d| {
-                                println!("In operator {:?}", d);
                                 match parse_formula(&d) {
                                     Formula::Fact(name, vec) => {
                                         if vec.is_empty() && name == name_copy {
@@ -196,6 +205,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                     let mut notifier = FrontierNotificator::new();
                     let mut stash: HashMap<usize, HashSet<String>> = HashMap::new();
                     move |input, output| {
+                        // handle evaluation of json with jq_query
                         while let Some((time, data)) = input.next() {
                             if data.len() == 0 {
                                 return;
@@ -205,49 +215,66 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                             let name_copy = f_name.clone();
 
                             data.iter().for_each(|d| {
-                                //println!("In operator {:?}", d);
-                                match parse_formula(&d) {
-                                    Formula::Fact(name, vec) => {
-                                        if vec.is_empty() && name == name_copy {
-                                            output.session(&time).give(Data(true, vec![]));
-                                        } else {
-                                            if name == name_copy {
-                                                if stash.contains_key(&tp) {
-                                                    if !stash.entry(tp).or_default().contains(d) {
-                                                        stash
-                                                            .entry(tp)
-                                                            .or_default()
-                                                            .insert(d.clone());
-                                                        let mut tmp = Vec::with_capacity(vec.len());
-                                                        for v in vec {
-                                                            match v {
-                                                                Cst(x) => tmp.push(x),
-                                                                Var(_) => {}
-                                                            }
-                                                        }
-                                                        output.session(&time).give(Data(true, tmp));
-                                                    }
-                                                } else {
-                                                    let mut tmp = HashSet::with_capacity(8);
-                                                    tmp.insert(d.clone());
-                                                    stash.insert(tp, tmp);
-                                                    let mut tmp = Vec::with_capacity(vec.len());
-                                                    for v in vec {
-                                                        match v {
-                                                            Cst(x) => tmp.push(x),
-                                                            Var(_) => {}
-                                                        }
-                                                    }
-                                                    output.session(&time).give(Data(true, tmp));
-                                                }
+                                println!("In operator 2 {:?}", &d);
+                                match &formula_clone {
+                                    Formula::JSONQuery(query) => {
+                                        match process_json_query(&query, &d) {
+                                            Ok(result) => {
+                                                // tmp should have the type Vec<Constant>
+                                                let mut tmp = Vec::with_capacity(1);
+                                                let contant = Constant::Str(result);
+                                                tmp.push(contant);
+                                                output.session(&time).give(Data(true, tmp));
+                                            }
+                                            Err(e) => {
+                                                println!("Error processing JSON query: {}", e)
                                             }
                                         }
                                     }
-                                    Eos => {
-                                        output.session(&time).give(MetaData(false, false));
-                                    }
                                     _ => {}
-                                };
+                                }
+                                // match parse_formula(&d) {
+                                //     Formula::Fact(name, vec) => {
+                                //         if vec.is_empty() && name == name_copy {
+                                //             output.session(&time).give(Data(true, vec![]));
+                                //         } else {
+                                //             if name == name_copy {
+                                //                 if stash.contains_key(&tp) {
+                                //                     if !stash.entry(tp).or_default().contains(d) {
+                                //                         stash
+                                //                             .entry(tp)
+                                //                             .or_default()
+                                //                             .insert(d.clone());
+                                //                         let mut tmp = Vec::with_capacity(vec.len());
+                                //                         for v in vec {
+                                //                             match v {
+                                //                                 Cst(x) => tmp.push(x),
+                                //                                 Var(_) => {}
+                                //                             }
+                                //                         }
+                                //                         output.session(&time).give(Data(true, tmp));
+                                //                     }
+                                //                 } else {
+                                //                     let mut tmp = HashSet::with_capacity(8);
+                                //                     tmp.insert(d.clone());
+                                //                     stash.insert(tp, tmp);
+                                //                     let mut tmp = Vec::with_capacity(vec.len());
+                                //                     for v in vec {
+                                //                         match v {
+                                //                             Cst(x) => tmp.push(x),
+                                //                             Var(_) => {}
+                                //                         }
+                                //                     }
+                                //                     output.session(&time).give(Data(true, tmp));
+                                //                 }
+                                //             }
+                                //         }
+                                //     }
+                                //     Eos => {
+                                //         output.session(&time).give(MetaData(false, false));
+                                //     }
+                                //     _ => {}
+                                // };
                             });
                         }
 
@@ -428,6 +455,15 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                 }
                 let (_, stream) = self.create_base_stream(visitor, &f);
                 (new_attrs, stream)
+            }
+            Expr::JSONQuery(query) => {
+                println!("JSON Query Stream: {:?}", query);
+                // få variabel navne. Hvis x er ændret til "foo" returner "foo" i stedet.
+                // Skal returneres til sidst i create stream from evaluation plan.
+                // let new attrs = get_json_attributes ?
+                let j = Formula::JSONQuery(query.clone());
+                let (_, stream) = self.create_base_stream(visitor, &j);
+                (vec!["foo".to_string()], stream)
             }
             Join(e1, e2) => {
                 let (at, lhs) = self.create_stream_from_evaluation_plan(

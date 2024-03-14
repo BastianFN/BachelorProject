@@ -31,7 +31,7 @@ pub use dataflow_constructor::dataflow_constructor::create_dataflow;
 pub use evaluation_plan_generator::evaluation_plan_generator::generate_evaluation_plan;
 pub use evaluation_plan_generator::evaluation_plan_generator::Expr;
 pub use parser::formula_syntax_tree::Formula;
-pub use parser::formula_parser::parse_formula;
+pub use parser::formula_parser::{parse_formula, parse_json_query, process_json_query};
 pub use timeunits::{TP, TS};
 
 pub fn main() {}

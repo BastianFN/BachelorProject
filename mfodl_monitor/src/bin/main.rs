@@ -16,7 +16,7 @@ use std::{println, writeln};
 
 use mfodl_monitor::dataflow_constructor::types::FlowValues::Data;
 use mfodl_monitor::parser::formula_syntax_tree::Constant;
-use mfodl_monitor::{create_dataflow, parse_formula};
+use mfodl_monitor::{create_dataflow, parse_formula, parse_json_query};
 use std::path::PathBuf;
 
 use mfodl_monitor::dataflow_constructor::types::TimeFlowValues::Timestamp;
@@ -31,7 +31,6 @@ use mfodl_monitor::parser::csv_parser::{
 };
 
 use mfodl_monitor::parser::json_parser::find_timestamp;
-use jq_rs::run as jq_run;
 
 // const MODE_VALS: &[&str] = &["order", "out_of_order"];
 
@@ -76,23 +75,115 @@ pub struct ProgArgs {
     timestamp: Option<u64>,
 }
 
-fn process_json_query(query: &str, json_data: &str) -> Result<String, jq_rs::Error> {
-    jq_run(query, json_data)
-}
-
 fn main() {
-    let query = ".[] | select(.type == \"edit\" and .bot == 0) | .user";
-    let json_data = r#"
-        [
-            {"user": "xyz", "type": "edit", "bot": 0},
-            {"user": "abc", "type": "edit", "bot": 1},
-            {"user": "lmn", "type": "done", "bot": 0}
-        ]
-    "#;
-    
-    match process_json_query(query, json_data) {
-        Ok(result) => println!("Query result: {}", result),
-        Err(e) => println!("Error processing JSON query: {}", e),
+    let args = ProgArgs::from_args();
+    println!("ARGS: {:?}", args);
+    let mut options = OperatorOptions::new();
+
+    let policy = args.policy;
+    let some_path_data = args.file;
+
+    options.set_workers(args.workers);
+    options.set_output_file(args.output_file);
+    // options.set_step(args.step);
+    options.set_step(1);
+    options.set_output_batch(args.batch_output);
+    options.set_deduplication(args.deduplication);
+
+    let out_put_mode = match args.mode_out_put {
+        0 | 1 | 2 => args.mode_out_put,
+        _ => {
+            println!("Passed out put mode is invalid!");
+            3
+        }
+    };
+    options.set_output_mode(out_put_mode);
+
+    // Check if policy is a file
+    let new_policy = if let Ok(f) = File::open(policy.clone()) {
+        let mut res = "".to_string();
+        for line in BufReader::new(&f).lines() {
+            res = res + &*line.unwrap()
+        }
+        res.to_string()
+    } else {
+        policy
+    };
+
+    let mut tp_to_ts: HashMap<usize, usize> = HashMap::with_capacity(8);
+
+    // println!("{} {:?}", policy.clone(), path_data.clone());
+    let res = if let Some(path_data) = some_path_data {
+        let (r, tpts) = execute_from_file(new_policy.clone(), path_data.clone(), options.clone());
+        tp_to_ts = tpts;
+        r
+    } else {
+        let (r, tpts) = execute_from_stdin(new_policy.clone(), options.clone());
+        tp_to_ts = tpts;
+        r
+    };
+
+    // support multiple output formats
+    if !res.is_empty() {
+        if let Some(file_name) = options.get_output_file() {
+            match File::create(file_name) {
+                Ok(mut file) => {
+                    //println!("{:?}", res);
+                    res.iter().for_each(|(tp, flow)| {
+                        //println!("@{tp} {:?}\n\n", flow);
+                        let mut out = format!("");
+                        flow.iter().for_each(|d| {
+                            let ver = d.clone();
+                            match ver {
+                                Data(true, vals) => {
+                                    if !vals.is_empty() {
+                                        if vals.len() == 1 {
+                                            match vals[0] {
+                                                Constant::Int(x) => {
+                                                    out += &format!(" ({:?}) ", x);
+                                                }
+                                                _ => {}
+                                            }
+                                        } else if vals.len() == 2 {
+                                            match vals[0] {
+                                                Constant::Int(x) => match vals[1] {
+                                                    Constant::Int(y) => {
+                                                        out += &format!(" ({:?},{:?}) ", x, y);
+                                                    }
+                                                    _ => {}
+                                                },
+                                                _ => {}
+                                            }
+                                        } else {
+                                            out += "(";
+                                            for v in 0..vals.len() - 1 {
+                                                match vals[v] {
+                                                    Constant::Int(x) => out += &format!("{:?},", x),
+                                                    _ => {}
+                                                }
+                                            }
+                                            match vals[vals.len() - 1] {
+                                                Constant::Int(x) => {
+                                                    out += &format!("{:?})", x);
+                                                }
+                                                Constant::Str(_) => {}
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => (),
+                            }
+                        });
+                        let ts = *tp_to_ts.entry(*tp).or_default();
+                        match writeln!(file, "@{ts} (time point {tp}): {}", out) {
+                            Err(err) => println!("Error writing: {}", err),
+                            _ => (),
+                        };
+                    });
+                }
+                Err(e) => println!("Error {:?}", e),
+            }
+        }
     }
 }
 
@@ -128,7 +219,7 @@ fn execute_from_stdin(
                     let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
 
                     let (_attrs, output) = create_dataflow(
-                        parse_formula(&policy),
+                        parse_json_query(&policy), // ændret fra parse_formula(&policy)?
                         stream,
                         time_stream,
                         options.clone(),

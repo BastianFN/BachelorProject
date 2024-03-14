@@ -9,6 +9,8 @@ use parser::formula_parser::Constant::{Int, Str};
 use parser::formula_syntax_tree::*;
 use timeunits::*;
 
+use jq_rs::run as jq_run;
+
 /// formula       --> iff
 /// iff           --> implication '<->' implication
 /// implication   --> conj {'->' conj}
@@ -78,8 +80,14 @@ pub fn parse_formula(s: &str) -> Formula {
     let tmp = s.clone();
     match formula(s) {
         Done(_i, o) => o,
-        IResult::Error(x) => {println!("Parser Error: {:?}   {:?}", x, tmp); FormulaError("Error".to_string())}
-        IResult::Incomplete(c) => {println!("Incomplete: {:?}", c); FormulaError("Incomplete".to_string())}
+        IResult::Error(x) => {
+            println!("Parser Error: {:?}   {:?}", x, tmp);
+            FormulaError("Error".to_string())
+        }
+        IResult::Incomplete(c) => {
+            println!("Incomplete: {:?}", c);
+            FormulaError("Incomplete".to_string())
+        }
     }
 }
 
@@ -98,7 +106,6 @@ named!(formula<&str, Formula>,
 //         (Formula::JSONFact(query.to_string(), serde_json::from_str(json).unwrap()))
 //     ))
 // );
-
 
 // iff = implication {'<->' implication}
 named!(iff<&str, Formula>,
@@ -284,9 +291,115 @@ named!(formula_l1<&str, Formula>,
 //              exists | forall | fact
 named!(formula_l2<&str, Formula>,
     ws!(alt_complete!(
-        true_f | false_f | base_value | once | eventually | bracketted_formula | prev | next | forall | exists | empty_fact | fact | eos | num_equals | equals | always | historically
+        true_f | false_f | base_value | once | eventually | bracketted_formula | prev | next | forall | exists | empty_fact | fact | eos | num_equals | equals | always | historically | json_query
     ))
 );
+
+named!(json_query<&str, Formula>,
+    ws!(do_parse!(
+        tag!("{{") >>
+        query: take_until!("}}") >>
+        tag!("}}") >>
+        (Formula::JSONQuery(query.to_string()))
+    ))
+);
+
+pub fn parse_json_query(s: &str) -> Formula {
+    println!("Parsing json query: {}", s);
+    match json_query(s) {
+        Done(_i, o) => {
+            if let Formula::JSONQuery(raw_query) = o {
+                // Parse the policy to separate conditions and projections
+                let (conditions, projections) = parse_policy(&raw_query);
+                // Construct the jq query string
+                let jq_query = construct_jq_query(conditions, projections);
+                // Return the transformed JSONQuery variant with the jq query string
+                Formula::JSONQuery(jq_query)
+            } else {
+                o // In case it's not a JSONQuery variant, though this should not happen
+            }
+        },
+        _ => FormulaError("Error parsing JSON query".to_string()),
+    }
+}
+
+
+fn construct_jq_query(conditions: Vec<(String, String)>, projections: Vec<String>) -> String {
+    let mut jq_query = String::from(".[] | select(");
+
+    // Add conditions
+    let conditions_str: Vec<String> = conditions
+        .iter()
+        .map(|(field, value)| format!("{} == {}", field, value))
+        .collect();
+
+    jq_query.push_str(&conditions_str.join(" and "));
+    jq_query.push(')');
+
+    // Add projection
+    if !projections.is_empty() {
+        let projection_str = projections.join(", ");
+        jq_query.push_str(" | ");
+        if projections.len() == 1 {
+            jq_query.push_str(&projection_str);
+        } else {
+            jq_query.push('{');
+            jq_query.push_str(
+                &projections
+                    .iter()
+                    .map(|p| format!("{0}: {0}", p))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            jq_query.push('}');
+        }
+    }
+
+    jq_query
+}
+
+fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let mut conditions = vec![];
+    let mut projections = vec![];
+
+    for condition in policy.split('&').map(str::trim) {
+        let parts: Vec<&str> = condition.split('=').map(str::trim).collect();
+        if parts.len() == 2 {
+            let field = parts[0].to_string();
+            let value = parts[1].to_string();
+
+            if field == value {
+                // Projection condition
+                projections.push(field.trim().to_string());
+            } else {
+                // let adjusted_value = match value.as_str() {
+                //     // Check if the value is already properly quoted
+                //     v if v.starts_with("\"") && v.ends_with("\"") => v.to_string(),
+                //     // Check if the value is numeric
+                //     v if v.parse::<f64>().is_ok() => v.to_string(),
+                //     // Assume it's an unquoted string otherwise and quote it
+                //     _ => format!("\"{}\"", value),
+                // };
+                // conditions.push((field, adjusted_value));
+                conditions.push((field, value));
+            }
+        }
+    }
+
+    (conditions, projections)
+}
+
+pub fn process_json_query(query: &str, json_data: &str) -> Result<String, jq_rs::Error> {
+    jq_run(query, json_data)
+}
+
+// fn parse_json_path(s: &str) -> IResult<&str, String> {
+//     // Parse a JSON path like '.user'
+// }
+
+// fn parse_value(s: &str) -> IResult<&str, Value> {
+//     // Parse a value (string, number, boolean, etc.)
+// }
 
 /*fn formula_l2(input: &str) -> IResult<&str, Formula> {
     //println!("input {:?}", input);
@@ -552,6 +665,8 @@ mod tests {
     use parser::formula_syntax_tree::*;
 
     use timeunits::{TimeInterval, TS};
+
+    use crate::parser::formula_parser::{construct_jq_query, parse_json_query, parse_policy};
 
     #[test]
     fn inf_interval_test() {
@@ -1269,5 +1384,37 @@ mod tests {
         let formula_expected = build_disj(lhs_expected, rhs_expected);
         let formula_actual = parse_formula(&input);
         assert_eq!(formula_expected, formula_actual);
+    }
+
+    #[test]
+    fn parse_json_query_test() {
+        let input = "{{.user = user & .type = \"edit\" & .bot = 0}}";
+        let actual = parse_json_query(input);
+        let expected = Formula::JSONQuery(".user = user & .type = \"edit\" & .bot = 0".to_string());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_parse_policy() {
+        let policy = ".user = .user & .type = \"edit\" & .bot = 0";
+        let expected_conditions = vec![
+            (".type".to_string(), "\"edit\"".to_string()),
+            (".bot".to_string(), "0".to_string()),
+        ];
+        let expected_projections = vec![".user".to_string()];
+
+        let (conditions, projections) = parse_policy(policy);
+
+        assert_eq!(conditions, expected_conditions);
+        assert_eq!(projections, expected_projections);
+    }
+
+    #[test]
+    fn parse_and_construct_test() {
+        let policy = ".user = .user & .type = \"edit\" & .bot = 0";
+        let (conditions, projections) = parse_policy(policy);
+        let result = construct_jq_query(conditions, projections);
+        let expected = ".[] | select(.type == \"edit\" and .bot == 0) | .user";
+        assert_eq!(result, expected);
     }
 }

@@ -10,6 +10,7 @@ use parser::formula_syntax_tree::*;
 use timeunits::*;
 
 use jq_rs::run as jq_run;
+use serde_json::Value;
 
 /// formula       --> iff
 /// iff           --> implication '<->' implication
@@ -389,8 +390,24 @@ fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>) {
     (conditions, projections)
 }
 
-pub fn process_json_query(query: &str, json_data: &str) -> Result<String, jq_rs::Error> {
-    jq_run(query, json_data)
+pub fn process_json_query(query: &str, json_data: &str) -> Result<Value, jq_rs::Error> {
+    println!("Query: {}", query);
+    println!("JSON data: {}", json_data);
+    let result = jq_run(query, json_data)?;
+
+    // Attempt to parse the jq output as JSON to preserve the original data type
+    let parsed_result: Result<Value, _> = serde_json::from_str(&result);
+
+    match parsed_result {
+        Ok(val) => {
+            // Successfully parsed jq output as JSON, preserving the original type
+            Ok(val)
+        },
+        Err(_) => {
+            // If parsing fails, return the raw result as a fallback (this might indicate an issue with the query or data)
+            Ok(Value::String(result))
+        }
+    }
 }
 
 // fn parse_json_path(s: &str) -> IResult<&str, String> {

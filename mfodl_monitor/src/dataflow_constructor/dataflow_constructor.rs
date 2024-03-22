@@ -220,10 +220,16 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                     Formula::JSONQuery(query) => {
                                         match process_json_query(&query, &d) {
                                             Ok(result) => {
-                                                // tmp should have the type Vec<Constant>
                                                 let mut tmp = Vec::with_capacity(1);
-                                                let contant = Constant::Str(result);
-                                                tmp.push(contant);
+                                                let constant = match result {
+                                                    // this needs to be refactored
+                                                    serde_json::Value::Number(x) => Constant::Int(x.as_i64().unwrap() as i32),
+                                                    serde_json::Value::String(x) => Constant::Str(x),
+                                                    serde_json::Value::Bool(x) => Constant::Str(x.to_string()),
+                                                    _ => Constant::Str("".to_string()),
+                                                };
+
+                                                tmp.push(constant);
                                                 output.session(&time).give(Data(true, tmp));
                                             }
                                             Err(e) => {

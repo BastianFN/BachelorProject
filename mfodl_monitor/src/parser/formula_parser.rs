@@ -373,15 +373,6 @@ fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>) {
                 // Projection condition
                 projections.push(field.trim().to_string());
             } else {
-                // let adjusted_value = match value.as_str() {
-                //     // Check if the value is already properly quoted
-                //     v if v.starts_with("\"") && v.ends_with("\"") => v.to_string(),
-                //     // Check if the value is numeric
-                //     v if v.parse::<f64>().is_ok() => v.to_string(),
-                //     // Assume it's an unquoted string otherwise and quote it
-                //     _ => format!("\"{}\"", value),
-                // };
-                // conditions.push((field, adjusted_value));
                 conditions.push((field, value));
             }
         }
@@ -404,19 +395,11 @@ pub fn process_json_query(query: &str, json_data: &str) -> Result<Value, jq_rs::
             Ok(val)
         },
         Err(_) => {
-            // If parsing fails, return the raw result as a fallback (this might indicate an issue with the query or data)
+            // Should handle the error here. For now, just return the raw string
             Ok(Value::String(result))
         }
     }
 }
-
-// fn parse_json_path(s: &str) -> IResult<&str, String> {
-//     // Parse a JSON path like '.user'
-// }
-
-// fn parse_value(s: &str) -> IResult<&str, Value> {
-//     // Parse a value (string, number, boolean, etc.)
-// }
 
 /*fn formula_l2(input: &str) -> IResult<&str, Formula> {
     //println!("input {:?}", input);

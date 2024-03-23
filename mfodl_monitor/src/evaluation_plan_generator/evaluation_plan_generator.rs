@@ -128,7 +128,6 @@ pub fn optimize_evaluation_plan(plan: Expr) -> Expr {
 }
 
 fn optimize_cases(plan: Expr) -> Expr {
-    println!("Optimizing {:?}", plan);
     match plan {
         FULL
         | EMPTY

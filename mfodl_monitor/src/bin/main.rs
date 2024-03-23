@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
+extern crate jq_rs;
 extern crate mfodl_monitor;
 extern crate nom;
 extern crate rand;
 extern crate structopt;
 extern crate timely;
-extern crate jq_rs;
 
 use std::cmp::max;
 use std::collections::HashMap;
@@ -73,6 +73,10 @@ pub struct ProgArgs {
     /// Timestamp to filter JSON data by
     #[structopt(short = "t", long = "timestamp")]
     timestamp: Option<u64>,
+
+    /// File type
+    #[structopt(short = "f", long = "filetype")]
+    file_type: Option<String>,
 }
 
 fn main() {
@@ -118,7 +122,7 @@ fn main() {
         tp_to_ts = tpts;
         r
     } else {
-        let (r, tpts) = execute_from_stdin(new_policy.clone(), options.clone());
+        let (r, tpts) = execute_from_stdin(new_policy.clone(), options.clone(), args.file_type);
         tp_to_ts = tpts;
         r
     };
@@ -190,6 +194,7 @@ fn main() {
 fn execute_from_stdin(
     policy: String,
     options: OperatorOptions,
+    file_type: Option<String>,
 ) -> (
     Vec<(
         usize,
@@ -219,7 +224,11 @@ fn execute_from_stdin(
                     let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
 
                     let (_attrs, output) = create_dataflow(
-                        parse_json_query(&policy), // ændret fra parse_formula(&policy)?
+                        if file_type.is_some() && file_type.clone().unwrap() == "json" {
+                            parse_json_query(&policy)
+                        } else {
+                            parse_formula(&policy)
+                        },
                         stream,
                         time_stream,
                         options.clone(),
@@ -231,49 +240,132 @@ fn execute_from_stdin(
                     (input, input_cap, time_input, time_cap, probe)
                 });
 
+            let file_type = file_type.clone();
             if worker.index() == 0 {
                 let mut current = 0;
                 let mut current_is_set = false;
 
                 let mut current_segment = Vec::with_capacity(options.get_step());
-                for line in io::stdin().lines() {
-                    let line = line.expect("Error reading line from stdin");
-                    match serde_json::from_str::<serde_json::Value>(&line) {
-                        Ok(json_value) => {
-                            if let Some(timestamp) = find_timestamp(&json_value) {
-                                let ts = timestamp as usize;
-                                time_input
-                                    .session(time_cap.delayed(&ts))
-                                    .give(Timestamp(ts));
-                                if !current_is_set {
-                                    current = ts;
-                                    current_is_set = true;
-                                }
-                                let val = json_value.to_string();
-                                if options.get_step() == 1 {
-                                    input.session(cap.delayed(&ts)).give(val);
-                                    worker.step();
-                                } else {
-                                    current_segment.push(val);
-                                    threshold = threshold + 1;
-                                    if threshold >= options.get_step() {
-                                        input
-                                            .session(cap.delayed(&ts))
-                                            .give_iterator(current_segment.into_iter());
-                                        worker.step();
-                                        threshold = 0;
-                                        // this is to avoid the vector being reallocated
-                                        current_segment = Vec::with_capacity(options.get_step());
+
+                match file_type {
+                    Some(ft) => {
+                        if ft == "json" {
+                            for line in io::stdin().lines() {
+                                let line = line.expect("Error reading line from stdin");
+                                match serde_json::from_str::<serde_json::Value>(&line) {
+                                    Ok(json_value) => {
+                                        if let Some(timestamp) = find_timestamp(&json_value) {
+                                            let ts = timestamp as usize;
+                                            time_input
+                                                .session(time_cap.delayed(&ts))
+                                                .give(Timestamp(ts));
+                                            if !current_is_set {
+                                                current = ts;
+                                                current_is_set = true;
+                                            }
+                                            let val = json_value.to_string();
+                                            if options.get_step() == 1 {
+                                                input.session(cap.delayed(&ts)).give(val);
+                                                worker.step();
+                                            } else {
+                                                current_segment.push(val);
+                                                threshold = threshold + 1;
+                                                if threshold >= options.get_step() {
+                                                    input
+                                                        .session(cap.delayed(&ts))
+                                                        .give_iterator(current_segment.into_iter());
+                                                    worker.step();
+                                                    threshold = 0;
+                                                    // this is to avoid the vector being reallocated
+                                                    current_segment =
+                                                        Vec::with_capacity(options.get_step());
+                                                }
+                                            }
+                                        }
                                     }
+                                    Err(e) => println!("JSON Parsing Error: {}", e),
+                                }
+
+                                if threshold >= options.get_step() {
+                                    worker.step();
+                                    threshold = 0;
                                 }
                             }
                         }
-                        Err(e) => println!("JSON Parsing Error: {}", e),
                     }
+                    // Default to CSV for now
+                    None => {
+                        for line in io::stdin().lines() {
+                            match parser_extended_wrapper(line.unwrap()) {
+                                ParserReturn::Data(tp, ts, val) => {
+                                    tp_to_ts.entry(tp).or_insert(ts);
+                                    if current_is_set {
+                                        if tp == current {
+                                            if options.get_step() == 1 {
+                                                input
+                                                    .session(cap.delayed(&tp))
+                                                    .give(val.to_string());
+                                                worker.step();
+                                            } else {
+                                                current_segment.push(val.to_string())
+                                            }
+                                        } else {
+                                            time_input
+                                                .session(time_cap.delayed(&tp))
+                                                .give(Timestamp(ts));
+                                            threshold = threshold + current_segment.len();
 
-                    if threshold >= options.get_step() {
-                        worker.step();
-                        threshold = 0;
+                                            if options.get_step() == 1 {
+                                                input
+                                                    .session(cap.delayed(&tp))
+                                                    .give(val.to_string());
+                                            } else {
+                                                input.session(cap.delayed(&tp)).give_iterator(
+                                                    current_segment.clone().into_iter(),
+                                                );
+                                            }
+
+                                            current_segment.clear();
+                                            current = tp;
+                                            current_segment.push(val.to_string());
+                                            worker.step();
+                                        }
+                                    } else {
+                                        current = tp;
+                                        current_is_set = true;
+                                        time_input
+                                            .session(time_cap.delayed(&current))
+                                            .give(Timestamp(ts));
+
+                                        if options.get_step() == 1 {
+                                            input.session(cap.delayed(&tp)).give(val.to_string());
+                                            worker.step();
+                                        } else {
+                                            current_segment.push(val.to_string())
+                                        }
+                                    }
+                                }
+                                ParserReturn::Watermark(wm) => {
+                                    threshold = threshold + current_segment.len();
+                                    input
+                                        .session(cap.delayed(&current))
+                                        .give_iterator(current_segment.clone().into_iter());
+                                    let t = if wm < 0 { 0 } else { wm as usize };
+                                    cap.downgrade(&t);
+                                    time_cap.downgrade(&t);
+                                    worker.step();
+                                    current_segment.clear();
+                                }
+                                ParserReturn::Error(s) => {
+                                    println!("Parser Error: {}", s);
+                                }
+                            }
+
+                            if threshold >= options.get_step() {
+                                worker.step();
+                                threshold = 0;
+                            }
+                        }
                     }
                 }
 

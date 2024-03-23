@@ -58,20 +58,14 @@ pub fn create_dataflow<G: Scope<Timestamp = usize>>(
         time_stream,
     };
 
-    println!("Policy {:?}", policy);
-
     let mut visitor = 0;
     let plan = generate_evaluation_plan(&policy.clone());
     let optimized_plan = optimize_evaluation_plan(plan.clone());
-    println!("Original  plan {:?}", plan);
-    println!("Optimized plan {:?}", optimized_plan);
     dataflow_constructor.create_stream(
         &mut visitor,
         optimized_plan.clone(),
         options.get_deduplication(),
     );
-
-    println!("Stream ma");
 
     if dataflow_constructor.stream_exists(optimized_plan.clone()) {
         let (tmp_str, tmp_stream) = dataflow_constructor.get_stream(optimized_plan.clone());
@@ -95,7 +89,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         f: &Formula,
     ) -> (Vec<String>, MonitorStream<G>) {
         *visitor = visitor.clone() + 1;
-        println!("In create base stream {:?}", f);
         let (f_name, args) = new_split_fact(f);
         let exchange = Exchange::new(move |event| calculate_hash(event));
 

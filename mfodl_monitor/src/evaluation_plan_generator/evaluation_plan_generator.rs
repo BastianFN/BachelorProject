@@ -11,7 +11,7 @@ pub enum Expr {
     FULL,
     EMPTY,
     Fact(String, Vec<Arg>),
-    JSONQuery(String),
+    JSONQuery(String, Vec<String>),
 
     Not(Box<Expr>),
     // This is a table in the monitor corresponding to a single subformula
@@ -132,7 +132,7 @@ fn optimize_cases(plan: Expr) -> Expr {
         FULL
         | EMPTY
         | Expr::Fact(_, _)
-        | Expr::JSONQuery(_)
+        | Expr::JSONQuery(_, _)
         | VarEquals(_, _)
         | Extend(_, _, _)
         | Filter(_, _, _)
@@ -289,7 +289,7 @@ fn generate_boolean_evaluation_plan(f: Formula) -> Expr {
         True => FULL,
         False => EMPTY,
         Formula::Fact(_, _) => build_assignment(f),
-        Formula::JSONQuery(_) => build_assignment(f),
+        Formula::JSONQuery(_, _) => build_assignment(f),
         Formula::Not(subf) => match *subf.clone() {
             FormulaError(_) => Error(format!(
                 "Error while generating an evaluation plan for {}",
@@ -469,7 +469,7 @@ pub fn build_assignment(f: Formula) -> Expr {
         True => FULL,
         False => EMPTY,
         Formula::Fact(x, y) => Expr::Fact(x, y),
-        Formula::JSONQuery(query) => Expr::JSONQuery(query),
+        Formula::JSONQuery(query, aliases) => Expr::JSONQuery(query, aliases),
         Formula::Not(lhs) => {
             let expr_lhs = build_assignment(*lhs);
             Expr::Not(Box::new(expr_lhs))

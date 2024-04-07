@@ -16,7 +16,7 @@ use std::{println, writeln};
 
 use mfodl_monitor::dataflow_constructor::types::FlowValues::Data;
 use mfodl_monitor::parser::formula_syntax_tree::Constant;
-use mfodl_monitor::{create_dataflow, parse_formula, parse_json_query};
+use mfodl_monitor::{create_dataflow, parse_formula};
 use std::path::PathBuf;
 
 use mfodl_monitor::dataflow_constructor::types::TimeFlowValues::Timestamp;
@@ -30,7 +30,7 @@ use mfodl_monitor::parser::csv_parser::{
     parse_file_to_segments, parser_extended_wrapper, ParserReturn, Segment,
 };
 
-use mfodl_monitor::parser::json_parser::find_timestamp;
+use mfodl_monitor::parser::json_parser::{find_nested_objects, find_timestamp};
 
 // const MODE_VALS: &[&str] = &["order", "out_of_order"];
 
@@ -59,7 +59,8 @@ pub struct ProgArgs {
     mode_out_put: usize,
 
     /// Step size of workers
-    #[structopt(short, long, default_value = "1000")]
+    /// TODO change back to 1000
+    #[structopt(short, long, default_value = "1")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)
@@ -81,7 +82,6 @@ pub struct ProgArgs {
 
 fn main() {
     let args = ProgArgs::from_args();
-    println!("ARGS: {:?}", args);
     let mut options = OperatorOptions::new();
 
     let policy = args.policy;
@@ -224,11 +224,7 @@ fn execute_from_stdin(
                     let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
 
                     let (_attrs, output) = create_dataflow(
-                        if file_type.is_some() && file_type.clone().unwrap() == "json" {
-                            parse_json_query(&policy)
-                        } else {
-                            parse_formula(&policy)
-                        },
+                        parse_formula(&policy),
                         stream,
                         time_stream,
                         options.clone(),
@@ -254,31 +250,41 @@ fn execute_from_stdin(
                                 let line = line.expect("Error reading line from stdin");
                                 match serde_json::from_str::<serde_json::Value>(&line) {
                                     Ok(json_value) => {
-                                        if let Some(timestamp) = find_timestamp(&json_value) {
-                                            let ts = timestamp as usize;
-                                            time_input
-                                                .session(time_cap.delayed(&ts))
-                                                .give(Timestamp(ts));
-                                            if !current_is_set {
-                                                current = ts;
-                                                current_is_set = true;
-                                            }
-                                            let val = json_value.to_string();
-                                            if options.get_step() == 1 {
-                                                input.session(cap.delayed(&ts)).give(val);
-                                                worker.step();
-                                            } else {
-                                                current_segment.push(val);
-                                                threshold = threshold + 1;
-                                                if threshold >= options.get_step() {
-                                                    input
-                                                        .session(cap.delayed(&ts))
-                                                        .give_iterator(current_segment.into_iter());
+                                        let objects = find_nested_objects(&json_value);
+                                        // TODO Create a recursive function to handle nested JSON
+                                        for object in objects {
+                                            if let Some(timestamp) = find_timestamp(&object) {
+                                                let ts = timestamp as usize;
+                                                time_input
+                                                    .session(time_cap.delayed(&ts))
+                                                    .give(Timestamp(ts));
+                                                if !current_is_set {
+                                                    current = ts;
+                                                    current_is_set = true;
+                                                }
+                                                println!("Item: {:?}", object);
+                                                let val = object.to_string();
+                                                // add [] around the value to make it a list
+                                                let val = format!("[{}]", val);
+                                                if options.get_step() == 1 {
+                                                    input.session(cap.delayed(&ts)).give(val);
                                                     worker.step();
-                                                    threshold = 0;
-                                                    // this is to avoid the vector being reallocated
-                                                    current_segment =
-                                                        Vec::with_capacity(options.get_step());
+                                                } else {
+                                                    //TODO handle this the appropriate way
+                                                    current_segment.push(val);
+                                                    threshold = threshold + 1;
+                                                    if threshold >= options.get_step() {
+                                                        input
+                                                            .session(cap.delayed(&ts))
+                                                            .give_iterator(
+                                                                current_segment.into_iter(),
+                                                            );
+                                                        worker.step();
+                                                        threshold = 0;
+                                                        // this is to avoid the vector being reallocated
+                                                        current_segment =
+                                                            Vec::with_capacity(options.get_step());
+                                                    }
                                                 }
                                             }
                                         }
@@ -307,6 +313,7 @@ fn execute_from_stdin(
                                                     .give(val.to_string());
                                                 worker.step();
                                             } else {
+                                                println!("Pushing to current segment: {}", val);
                                                 current_segment.push(val.to_string())
                                             }
                                         } else {

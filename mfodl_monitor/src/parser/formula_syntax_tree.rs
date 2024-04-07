@@ -1,4 +1,5 @@
 use std::fmt;
+use core::hash;
 
 use constants::CONJ_NEG_ERROR;
 use parser::formula_syntax_tree::Constant::{Int, Str};
@@ -6,6 +7,19 @@ use parser::formula_syntax_tree::Formula::*;
 use std::collections::{BTreeSet, HashSet};
 
 use timeunits::*;
+
+// impl hash::Hash for JqProgram {
+//     fn hash<H: hash::Hasher>(&self, state: &mut H) {
+//         self.0.hash(state);
+//     }
+// }
+
+// impl fmt::Debug for JqProgram {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         write!(f, "JqProgram {{ jq: [JqProgram Instance] }}")
+//     }
+// }
+
 
 #[derive(Hash, Eq, Clone, Debug, PartialEq, Ord, PartialOrd, Abomonation)]
 pub enum Formula {
@@ -16,7 +30,7 @@ pub enum Formula {
 
     CstFact(String, Vec<Constant>),
     Fact(String, Vec<Arg>),
-    JSONQuery(String),
+    JSONQuery(String, Vec<String>),
     Not(Box<Formula>),
     Equals(String, Box<Arg>),
 
@@ -127,8 +141,9 @@ impl fmt::Display for Formula {
                     str.push_str("()");
                 }
             }
-            JSONQuery(name) => {
+            JSONQuery(name, aliases) => {
                 str.push_str(&name);
+                //TODO add aliases
             }
             Once(lhs, time) => {
                 let mut tmp = String::new();

@@ -59,8 +59,7 @@ pub struct ProgArgs {
     mode_out_put: usize,
 
     /// Step size of workers
-    /// TODO change back to 1000
-    #[structopt(short, long, default_value = "1")]
+    #[structopt(short, long, default_value = "1000")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)
@@ -262,7 +261,7 @@ fn execute_from_stdin(
                                                     current = ts;
                                                     current_is_set = true;
                                                 }
-                                                println!("Item: {:?}", object);
+                                                // println!("Item: {:?}", object);
                                                 let val = object.to_string();
                                                 // add [] around the value to make it a list
                                                 let val = format!("[{}]", val);

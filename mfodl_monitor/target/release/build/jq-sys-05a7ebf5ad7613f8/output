@@ -1,3 +1,0 @@
-cargo:rustc-link-search=native=/opt/homebrew/opt/jq/1.7.1/lib
-cargo:rustc-link-lib=jq
-cargo:rustc-link-lib=onig

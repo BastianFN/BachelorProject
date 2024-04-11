@@ -48,6 +48,31 @@ pub fn find_timestamp(value: &Value) -> Option<u64> {
     }
 }
 
+pub fn find_nested_objects(value: &Value) -> Vec<Value> {
+    let mut objects = Vec::new();
+
+    match value {
+        Value::Object(map) => {
+            // If the current value is an object, add it to the list
+            objects.push(value.clone());
+            // Then iterate over its values to find nested objects
+            for val in map.values() {
+                objects.extend(find_nested_objects(val));
+            }
+        }
+        Value::Array(arr) => {
+            // If the current value is an array, look for objects in each element
+            for item in arr {
+                objects.extend(find_nested_objects(item));
+            }
+        }
+        // Other JSON types do not contain nested objects
+        _ => {}
+    }
+
+    objects
+}
+
 // Parses a JSON file and creates segments based on the extracted timestamps
 pub fn parse_json_file_to_segments(path: PathBuf) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();

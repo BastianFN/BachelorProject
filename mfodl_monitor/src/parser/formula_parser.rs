@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_doc_comments)]
+use std::sync::{Arc, Mutex};
+
 use nom::IResult::Done;
 
 use nom::{alphanumeric, digit, IResult};
@@ -8,6 +10,11 @@ use Formula::FormulaError;
 use parser::formula_parser::Constant::{Int, Str};
 use parser::formula_syntax_tree::*;
 use timeunits::*;
+
+use jq_rs::compile as jq_compile;
+use jq_rs::run as jq_run;
+use jq_rs::JqProgram;
+use serde_json::Value;
 
 /// formula       --> iff
 /// iff           --> implication '<->' implication
@@ -76,10 +83,17 @@ named!(clean_empty_fact<&str, (String, Vec<Constant>)>,
 
 pub fn parse_formula(s: &str) -> Formula {
     let tmp = s.clone();
+    println!("Parsing formula: {}", s);
     match formula(s) {
         Done(_i, o) => o,
-        IResult::Error(x) => {println!("Parser Error: {:?}   {:?}", x, tmp); FormulaError("Error".to_string())}
-        IResult::Incomplete(c) => {println!("Incomplete: {:?}", c); FormulaError("Incomplete".to_string())}
+        IResult::Error(x) => {
+            println!("Parser Error: {:?}   {:?}", x, tmp);
+            FormulaError("Error".to_string())
+        }
+        IResult::Incomplete(c) => {
+            println!("Incomplete: {:?}", c);
+            FormulaError("Incomplete".to_string())
+        }
     }
 }
 
@@ -274,9 +288,120 @@ named!(formula_l1<&str, Formula>,
 //              exists | forall | fact
 named!(formula_l2<&str, Formula>,
     ws!(alt_complete!(
-        true_f | false_f | base_value | once | eventually | bracketted_formula | prev | next | forall | exists | empty_fact | fact | eos | num_equals | equals | always | historically
+        true_f | false_f | base_value | once | eventually | bracketted_formula | prev | next | forall | exists | empty_fact | fact | eos | num_equals | equals | always | historically | json_query
     ))
 );
+
+pub fn parse_json_formula(s: &str) -> Formula {
+    match json_query(s) {
+        Done(_i, o) => o,
+        _ => FormulaError("Json Error".to_string()),
+    }
+}
+
+named!(json_query<&str, Formula>,
+    ws!(do_parse!(
+        tag!("{") >>
+        query: take_until!("}") >>
+        tag!("}") >>
+        (parse_json_query(query))
+    ))
+);
+
+pub fn parse_json_query(s: &str) -> Formula {
+    // Parse the policy to separate conditions and projections
+    let (conditions, projections, aliases) = parse_policy(s);
+
+    // Construct the jq query string
+    let jq_query = construct_jq_query(conditions, projections);
+    // Return the transformed JSONQuery variant with the jq query string
+    Formula::JSONQuery(jq_query, aliases)
+}
+
+fn construct_jq_query(conditions: Vec<(String, String)>, projections: Vec<String>) -> String {
+    let mut jq_query = String::from(".[] | select(");
+
+    // Add conditions, formatting values as strings or numbers accordingly
+    let conditions_str: Vec<String> = conditions
+        .iter()
+        .map(|(field, value)| {
+            // Check if the value is numeric or a boolean and format accordingly
+            let formatted_value = if value.chars().all(|c| c.is_digit(10) || c == '.') {
+                // Value looks numeric (simple check for digits and decimal point), leave as-is
+                value.clone()
+                // TODO handle boolean values properly. For now, assume they are strings
+            } else if value == "true" || value == "false" {
+                value.clone()
+            } else {
+                // Assume value is a string, enclose in quotes
+                format!("\"{}\"", value)
+            };
+            format!("{} == {}", field, formatted_value)
+        })
+        .collect();
+
+    jq_query.push_str(&conditions_str.join(" and "));
+    jq_query.push(')');
+
+    // Add projection
+    if !projections.is_empty() {
+        // Assuming projections are already properly formatted
+        let projection_str = projections.join(" and ");
+        jq_query.push_str(" | ");
+
+        jq_query.push_str(&projection_str);
+    }
+    // let compiled_program = jq_compile(&jq_query).unwrap();
+    jq_query
+}
+
+fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>, Vec<(String)>) {
+    let mut conditions = vec![];
+    let mut projections = vec![];
+    let mut aliases = vec![];
+
+    for condition in policy.split('&').map(str::trim) {
+        let parts: Vec<&str> = condition.split('=').map(str::trim).collect();
+        if parts.len() == 2 {
+            conditions.push((parts[0].to_string(), parts[1].trim_matches('"').to_string()));
+        } else if parts.len() == 1 {
+            // Check for " AS " (with spaces to ensure it's a standalone word)
+            if parts[0].contains(" AS ") {
+                let projection_parts: Vec<&str> = parts[0].split(" AS ").collect();
+                if projection_parts.len() == 2 {
+                    projections.push(projection_parts[0].trim().to_string());
+                    aliases.push(projection_parts[1].trim().to_string());
+                }
+            } else {
+                projections.push(parts[0].to_string());
+                aliases.push(parts[0].to_string());
+            }
+        }
+    }
+
+    (conditions, projections, aliases)
+}
+
+// pub fn process_json_query(
+//     query: &JqProgram,
+//     json_data: &str,
+// ) -> Result<Value, jq_rs::Error> {
+//     let result = query.run(json_data)?;
+
+//     // Attempt to parse the jq output as JSON to preserve the original data type
+//     let parsed_result: Result<Value, _> = serde_json::from_str(&result);
+
+//     match parsed_result {
+//         Ok(val) => {
+//             // Successfully parsed jq output as JSON, preserving the original type
+//             Ok(val)
+//         }
+//         Err(_) => {
+//             // Should handle the error here. For now, just return the raw string
+//             Ok(Value::String(result))
+//         }
+//     }
+// }
 
 /*fn formula_l2(input: &str) -> IResult<&str, Formula> {
     //println!("input {:?}", input);
@@ -542,6 +667,8 @@ mod tests {
     use parser::formula_syntax_tree::*;
 
     use timeunits::{TimeInterval, TS};
+
+    use crate::parser::formula_parser::{construct_jq_query, parse_json_query, parse_policy};
 
     #[test]
     fn inf_interval_test() {
@@ -1260,4 +1387,39 @@ mod tests {
         let formula_actual = parse_formula(&input);
         assert_eq!(formula_expected, formula_actual);
     }
+
+    // #[test]
+    // fn parse_json_query_test() {
+    //     let input = "{{.user = user & .type = \"edit\" & .bot = 0}}";
+    //     let actual = parse_json_query(input);
+    //     let expected = (
+    //         Formula::JSONQuery(".user = user & .type = \"edit\" & .bot = 0".to_string()),
+    //         vec![],
+    //     );
+    //     assert_eq!(actual, expected);
+    // }
+
+    // #[test]
+    // fn test_parse_policy() {
+    //     let policy = ".user = .user & .type = \"edit\" & .bot = 0";
+    //     let expected_conditions = vec![
+    //         (".type".to_string(), "\"edit\"".to_string()),
+    //         (".bot".to_string(), "0".to_string()),
+    //     ];
+    //     let expected_projections = vec![".user".to_string()];
+
+    //     let (conditions, projections, empty_vec) = parse_policy(policy);
+
+    //     assert_eq!(conditions, expected_conditions);
+    //     assert_eq!(projections, expected_projections);
+    // }
+
+    // #[test]
+    // fn parse_and_construct_test() {
+    //     let policy = ".user = .user & .type = \"edit\" & .bot = 0";
+    //     let (conditions, projections, empty_vec) = parse_policy(policy);
+    //     let result = construct_jq_query(conditions, projections);
+    //     let expected = ".[] | select(.type == \"edit\" and .bot == 0) | .user";
+    //     assert_eq!(result, expected);
+    // }
 }

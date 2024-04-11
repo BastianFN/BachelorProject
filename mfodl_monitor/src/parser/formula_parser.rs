@@ -309,13 +309,9 @@ named!(json_query<&str, Formula>,
 );
 
 pub fn parse_json_query(s: &str) -> Formula {
-    println!("Parsing json query: {}", s);
     // Parse the policy to separate conditions and projections
     let (conditions, projections, aliases) = parse_policy(s);
-    println!(
-        "Conditions: {:?}, Projections: {:?}",
-        conditions, projections
-    );
+
     // Construct the jq query string
     let jq_query = construct_jq_query(conditions, projections);
     // Return the transformed JSONQuery variant with the jq query string
@@ -386,27 +382,26 @@ fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>, Vec<(Strin
     (conditions, projections, aliases)
 }
 
-pub fn process_json_query(
-    query: &Arc<Mutex<JqProgram>>,
-    json_data: &str,
-) -> Result<Value, jq_rs::Error> {
-    let mut query_guard = query.lock().unwrap();
-    let result = query_guard.run(json_data)?;
+// pub fn process_json_query(
+//     query: &JqProgram,
+//     json_data: &str,
+// ) -> Result<Value, jq_rs::Error> {
+//     let result = query.run(json_data)?;
 
-    // Attempt to parse the jq output as JSON to preserve the original data type
-    let parsed_result: Result<Value, _> = serde_json::from_str(&result);
+//     // Attempt to parse the jq output as JSON to preserve the original data type
+//     let parsed_result: Result<Value, _> = serde_json::from_str(&result);
 
-    match parsed_result {
-        Ok(val) => {
-            // Successfully parsed jq output as JSON, preserving the original type
-            Ok(val)
-        }
-        Err(_) => {
-            // Should handle the error here. For now, just return the raw string
-            Ok(Value::String(result))
-        }
-    }
-}
+//     match parsed_result {
+//         Ok(val) => {
+//             // Successfully parsed jq output as JSON, preserving the original type
+//             Ok(val)
+//         }
+//         Err(_) => {
+//             // Should handle the error here. For now, just return the raw string
+//             Ok(Value::String(result))
+//         }
+//     }
+// }
 
 /*fn formula_l2(input: &str) -> IResult<&str, Formula> {
     //println!("input {:?}", input);

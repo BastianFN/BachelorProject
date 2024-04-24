@@ -59,7 +59,8 @@ pub struct ProgArgs {
     mode_out_put: usize,
 
     /// Step size of workers
-    #[structopt(short, long, default_value = "1000")]
+    /// TODO Change back to 1000?
+    #[structopt(short, long, default_value = "20")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)
@@ -88,8 +89,8 @@ fn main() {
 
     options.set_workers(args.workers);
     options.set_output_file(args.output_file);
-    // options.set_step(args.step);
-    options.set_step(1);
+    options.set_step(args.step);
+    // options.set_step(20);
     options.set_output_batch(args.batch_output);
     options.set_deduplication(args.deduplication);
 
@@ -276,24 +277,20 @@ fn execute_from_stdin(
                                                         input
                                                             .session(cap.delayed(&ts))
                                                             .give_iterator(
-                                                                current_segment.into_iter(),
+                                                                current_segment.drain(..),
                                                             );
                                                         worker.step();
                                                         threshold = 0;
                                                         // this is to avoid the vector being reallocated
-                                                        current_segment =
-                                                            Vec::with_capacity(options.get_step());
+                                                        // current_segment =
+                                                        //     Vec::with_capacity(options.get_step());
+                                                        current_segment.clear();
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                     Err(e) => println!("JSON Parsing Error: {}", e),
-                                }
-
-                                if threshold >= options.get_step() {
-                                    worker.step();
-                                    threshold = 0;
                                 }
                             }
                         }
@@ -312,7 +309,7 @@ fn execute_from_stdin(
                                                     .give(val.to_string());
                                                 worker.step();
                                             } else {
-                                                println!("Pushing to current segment: {}", val);
+                                                // println!("Pushing to current segment: {}", val);
                                                 current_segment.push(val.to_string())
                                             }
                                         } else {

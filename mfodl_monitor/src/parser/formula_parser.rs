@@ -83,7 +83,6 @@ named!(clean_empty_fact<&str, (String, Vec<Constant>)>,
 
 pub fn parse_formula(s: &str) -> Formula {
     let tmp = s.clone();
-    println!("Parsing formula: {}", s);
     match formula(s) {
         Done(_i, o) => o,
         IResult::Error(x) => {

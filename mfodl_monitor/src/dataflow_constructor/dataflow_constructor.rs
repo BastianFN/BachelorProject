@@ -102,10 +102,10 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         let formula_clone = f.clone();
 
         // TODO Parse to jqprogram here?
-        let compiled_query = match f {
-            Formula::JSONQuery(query, _) => Arc::new(Mutex::new(jq_compile(&query).unwrap())),
-            _ => Arc::new(Mutex::new(jq_compile(&"".to_string()).unwrap())),
-        };
+        // let compiled_query = match f {
+        //     Formula::JSONQuery(query, _) => Arc::new(Mutex::new(jq_compile(&query).unwrap())),
+        //     _ => Arc::new(Mutex::new(jq_compile(&"".to_string()).unwrap())),
+        // };
 
         let output = if !simple_mode {
             self.data_stream
@@ -575,7 +575,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                 (new_attrs, stream)
             }
             Expr::JSONQuery(query, aliases) => {
-                // println!("JSON Query Stream: {:?}", query);
                 // få variabel navne. Hvis x er ændret til "foo" returner "foo" i stedet.
                 // Skal returneres til sidst i create stream from evaluation plan.
                 // let new attrs = get_json_attributes ?

@@ -60,7 +60,7 @@ pub struct ProgArgs {
 
     /// Step size of workers
     /// TODO Change back to 1000?
-    #[structopt(short, long, default_value = "20")]
+    #[structopt(short, long, default_value = "1")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)

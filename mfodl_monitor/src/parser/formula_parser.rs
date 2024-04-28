@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 #![allow(unused_doc_comments)]
-use std::sync::{Arc, Mutex};
 
 use nom::IResult::Done;
 
@@ -10,11 +9,6 @@ use Formula::FormulaError;
 use parser::formula_parser::Constant::{Int, Str};
 use parser::formula_syntax_tree::*;
 use timeunits::*;
-
-use jq_rs::compile as jq_compile;
-use jq_rs::run as jq_run;
-use jq_rs::JqProgram;
-use serde_json::Value;
 
 /// formula       --> iff
 /// iff           --> implication '<->' implication
@@ -354,7 +348,7 @@ fn construct_jq_query(conditions: Vec<(String, String)>, projections: Vec<String
     jq_query
 }
 
-fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>, Vec<(String)>) {
+fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
     let mut conditions = vec![];
     let mut projections = vec![];
     let mut aliases = vec![];
@@ -380,27 +374,6 @@ fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>, Vec<(Strin
 
     (conditions, projections, aliases)
 }
-
-// pub fn process_json_query(
-//     query: &JqProgram,
-//     json_data: &str,
-// ) -> Result<Value, jq_rs::Error> {
-//     let result = query.run(json_data)?;
-
-//     // Attempt to parse the jq output as JSON to preserve the original data type
-//     let parsed_result: Result<Value, _> = serde_json::from_str(&result);
-
-//     match parsed_result {
-//         Ok(val) => {
-//             // Successfully parsed jq output as JSON, preserving the original type
-//             Ok(val)
-//         }
-//         Err(_) => {
-//             // Should handle the error here. For now, just return the raw string
-//             Ok(Value::String(result))
-//         }
-//     }
-// }
 
 /*fn formula_l2(input: &str) -> IResult<&str, Formula> {
     //println!("input {:?}", input);

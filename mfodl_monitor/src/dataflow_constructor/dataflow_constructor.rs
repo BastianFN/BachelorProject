@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
 use nom::print;
-use serde_json::Value as serde_value;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Map;
 
@@ -34,9 +33,6 @@ use dataflow_constructor::operators::{
 use parser::formula_syntax_tree::Constant::Str;
 
 use jq_rs::compile as jq_compile;
-use jq_rs::run as jq_run;
-
-use std::sync::{Arc, Mutex};
 
 type MonitorStream<G> = Stream<G, Record>;
 type DataStream<G> = Stream<G, String>;
@@ -332,6 +328,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                 .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
                     let mut compiled_query = jq_compile(&query).unwrap();
                     let mut notifier = FrontierNotificator::new();
+                    // TODO implement stashing
                     let mut stash: HashMap<usize, HashSet<String>> = HashMap::new();
                     move |input, output| {
                         while let Some((time, data)) = input.next() {
@@ -349,16 +346,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                     }
                                     let parsed_result = serde_json::from_str(result);
 
-                                    // let final_result: Result<serde_value, _> = match parsed_result {
-                                    //     Ok(val) => {
-                                    //         // Successfully parsed jq output as JSON, preserving the original type
-                                    //         Ok(val)
-                                    //     }
-                                    //     Err(_) => {
-                                    //         // Should handle the error here. For now, just return the raw string
-                                    //         Err(result.to_string())
-                                    //     }
-                                    // };
                                     match parsed_result {
                                         Ok(result) => {
                                             let mut tmp = Vec::with_capacity(1);
@@ -379,6 +366,11 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                 serde_json::Value::Bool(x) => {
                                                     Constant::Str(x.to_string())
                                                 }
+                                                // TODO add support for arrays and objects
+                                                // serde_json::Value::Object(x) => {
+                                                //     println!("Object: {:?}", x);
+                                                // }
+
                                                 _ => Constant::Str("".to_string()),
                                             };
 

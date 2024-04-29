@@ -97,12 +97,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
 
         let formula_clone = f.clone();
 
-        // TODO Parse to jqprogram here?
-        // let compiled_query = match f {
-        //     Formula::JSONQuery(query, _) => Arc::new(Mutex::new(jq_compile(&query).unwrap())),
-        //     _ => Arc::new(Mutex::new(jq_compile(&"".to_string()).unwrap())),
-        // };
-
         let output = if !simple_mode {
             self.data_stream
                 .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
@@ -289,6 +283,8 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         *visitor = visitor.clone() + 1;
         let exchange = Exchange::new(move |event| calculate_hash(event));
 
+        let plan = Expr::JSONQuery(query.clone(), aliases.clone());
+
         let output =
             self.data_stream
                 .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
@@ -368,10 +364,8 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                     }
                 });
 
-        // TODO create plan from Expr
-        // let plan =
-        // self.stream_map
-        //     .insert(plan, (aliases.clone(), output.clone()));
+        self.stream_map
+            .insert(plan, (aliases.clone(), output.clone()));
 
         (aliases, output)
     }
@@ -542,9 +536,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                 (new_attrs, stream)
             }
             Expr::JSONQuery(query, aliases) => {
-                // få variabel navne. Hvis x er ændret til "foo" returner "foo" i stedet.
-                // Skal returneres til sidst i create stream from evaluation plan.
-                // let new attrs = get_json_attributes ?
                 let (_, stream) = self.create_json_base_stream(visitor, query, aliases.clone());
                 (aliases, stream)
             }

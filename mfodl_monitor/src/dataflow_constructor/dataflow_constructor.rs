@@ -217,38 +217,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                     output.session(&time).give(MetaData(false, false));
                                 } else {
                                     match &formula_clone {
-                                        // Formula::JSONQuery(query, aliases) => {
-                                        //     match process_json_query(&compiled_query, &d) {
-                                        //         Ok(result) => {
-                                        //             let mut tmp = Vec::with_capacity(1);
-                                        //             let constant = match result {
-                                        //                 // this needs to be refactored
-                                        //                 serde_json::Value::String(x) => {
-                                        //                     // if x is an empty string
-                                        //                     if x.is_empty() {
-                                        //                         return;
-                                        //                     } else {
-                                        //                         Constant::Str(x)
-                                        //                     }
-                                        //                 }
-                                        //                 serde_json::Value::Number(x) => {
-                                        //                     Constant::Int(x.as_i64().unwrap() as i32)
-                                        //                 }
-                                        //                 // probably shouldn't be a string?
-                                        //                 serde_json::Value::Bool(x) => {
-                                        //                     Constant::Str(x.to_string())
-                                        //                 }
-                                        //                 _ => Constant::Str("".to_string()),
-                                        //             };
-
-                                        //             tmp.push(constant);
-                                        //             output.session(&time).give(Data(true, tmp));
-                                        //         }
-                                        //         Err(e) => {
-                                        //             println!("Error processing JSON query: {}", e)
-                                        //         }
-                                        //     }
-                                        // }
                                         Formula::Fact(name, vec) => {
                                             if vec.is_empty() && name.clone() == name_copy {
                                                 output.session(&time).give(Data(true, vec![]));
@@ -321,21 +289,18 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         *visitor = visitor.clone() + 1;
         let exchange = Exchange::new(move |event| calculate_hash(event));
 
-        // TODO Parse to jqprogram here?
-
         let output =
             self.data_stream
                 .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
                     let mut compiled_query = jq_compile(&query).unwrap();
                     let mut notifier = FrontierNotificator::new();
-                    // TODO implement stashing
-                    let mut stash: HashMap<usize, HashSet<String>> = HashMap::new();
+                    let mut stash: HashMap<usize, HashSet<Constant>> = HashMap::new();
                     move |input, output| {
                         while let Some((time, data)) = input.next() {
                             if data.len() == 0 {
                                 return;
                             }
-
+                            let tp = time.time().clone();
                             data.iter().for_each(|d| {
                                 if d == "<eos>" {
                                     output.session(&time).give(MetaData(false, false));
@@ -345,10 +310,8 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                         return;
                                     }
                                     let parsed_result = serde_json::from_str(result);
-
                                     match parsed_result {
                                         Ok(result) => {
-                                            let mut tmp = Vec::with_capacity(1);
                                             let constant = match result {
                                                 // this needs to be refactored
                                                 serde_json::Value::String(x) => {
@@ -356,6 +319,9 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                     if x.is_empty() {
                                                         return;
                                                     } else {
+                                                        if tp == 1714134899 {
+                                                            println!("String: {:?}", x);
+                                                        }
                                                         Constant::Str(x)
                                                     }
                                                 }
@@ -370,12 +336,29 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                 // serde_json::Value::Object(x) => {
                                                 //     println!("Object: {:?}", x);
                                                 // }
-
                                                 _ => Constant::Str("".to_string()),
                                             };
+                                            if stash.contains_key(&tp) {
+                                                if !stash.entry(tp).or_default().contains(&constant)
+                                                {
+                                                    let mut tmp = Vec::with_capacity(8);
+                                                    stash
+                                                        .entry(tp)
+                                                        .or_default()
+                                                        .insert(constant.clone());
 
-                                            tmp.push(constant);
-                                            output.session(&time).give(Data(true, tmp));
+                                                    tmp.push(constant);
+                                                    output.session(&time).give(Data(true, tmp));
+                                                }
+                                            } else {
+                                                let mut tmp = HashSet::with_capacity(8);
+                                                tmp.insert(constant.clone());
+                                                stash.insert(tp, tmp);
+                                                let mut tmp = Vec::with_capacity(8);
+
+                                                tmp.push(constant);
+                                                output.session(&time).give(Data(true, tmp));
+                                            }
                                         }
                                         Err(e) => {
                                             println!(

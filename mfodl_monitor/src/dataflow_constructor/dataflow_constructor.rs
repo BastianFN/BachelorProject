@@ -313,17 +313,9 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                     match parsed_result {
                                         Ok(result) => {
                                             let constant = match result {
-                                                // this needs to be refactored
+                                                // TODO maybe refactor this
                                                 serde_json::Value::String(x) => {
-                                                    // if x is an empty string
-                                                    if x.is_empty() {
-                                                        return;
-                                                    } else {
-                                                        if tp == 1714134899 {
-                                                            println!("String: {:?}", x);
-                                                        }
-                                                        Constant::Str(x)
-                                                    }
+                                                    Constant::Str(x)
                                                 }
                                                 serde_json::Value::Number(x) => {
                                                     Constant::Int(x.as_i64().unwrap() as i32)
@@ -332,7 +324,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                 serde_json::Value::Bool(x) => {
                                                     Constant::Str(x.to_string())
                                                 }
-                                                // TODO add support for arrays and objects
+                                                // TODO add support for objects
                                                 // serde_json::Value::Object(x) => {
                                                 //     println!("Object: {:?}", x);
                                                 // }

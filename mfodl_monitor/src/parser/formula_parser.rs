@@ -640,8 +640,6 @@ mod tests {
 
     use timeunits::{TimeInterval, TS};
 
-    use crate::parser::formula_parser::{construct_jq_query, parse_json_query, parse_policy};
-
     #[test]
     fn inf_interval_test() {
         let x = "[0,*)";

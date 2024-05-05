@@ -4,6 +4,7 @@ use constants::CONJ_NEG_ERROR;
 use parser::formula_syntax_tree::Constant::{Int, Str};
 use parser::formula_syntax_tree::Formula::*;
 use std::collections::{BTreeSet, HashSet};
+use serde_json::Value;
 
 use timeunits::*;
 
@@ -38,12 +39,14 @@ pub enum Formula {
     FormulaError(String),
 }
 
+// impl Hash for Value {}
+
 #[derive(Hash, Eq, Clone, Debug, PartialEq, Ord, PartialOrd, Abomonation)]
 pub enum Constant {
     Int(i32),
     Str(String),
     // TODO add json object
-    // JsonObj(String),
+    // JSONValue(Value),
 }
 
 #[derive(Hash, Eq, Clone, Debug, PartialEq, Ord, PartialOrd, Abomonation)]
@@ -131,7 +134,19 @@ impl fmt::Display for Formula {
             }
             JSONQuery(name, aliases) => {
                 str.push_str(&name);
-                //TODO add aliases
+                //TODO check if this part makes sense
+                if !aliases.is_empty() {
+                    let mut tmp = String::new();
+                    for i in 0..(aliases.len() - 1) {
+                        tmp.push_str(&aliases[i]);
+                        tmp.push(',');
+                    }
+                    tmp.push_str(&aliases[aliases.len() - 1]);
+
+                    str.push_str(&bracket_string(tmp));
+                } else {
+                    str.push_str("()");
+                }
             }
             Once(lhs, time) => {
                 let mut tmp = String::new();

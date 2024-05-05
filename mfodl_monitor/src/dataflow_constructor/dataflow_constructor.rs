@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 
-use nom::print;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Map;
 

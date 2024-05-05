@@ -7,3 +7,4 @@
 *.json
 *.d
 /mfodl_monitor/target
+/mfodl_monitor/benchmark_results

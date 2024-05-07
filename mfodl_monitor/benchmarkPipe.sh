@@ -4,7 +4,7 @@
 N=20
 
 # Array of JSON data files
-json_files=("cleaned_data1800.json")
+json_files=("cleaned_data300.json" "cleaned_data600.json" "cleaned_data900.json" "cleaned_data1800.json")
 
 # Array of worker counts
 worker_counts=(1 2 4 8)

@@ -8,3 +8,4 @@
 *.d
 /mfodl_monitor/target
 /mfodl_monitor/benchmark_results
+/mfodl_monitor/first_benchmark_results

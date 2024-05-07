@@ -4,7 +4,7 @@
 N=20
 
 # Array of JSON data files
-json_files=("cleaned_data300.json" "cleaned_data600.json" "cleaned_data900.json" "cleaned_data1800.json")
+json_files=("cleaned_data1800.json")
 
 # Array of worker counts
 worker_counts=(1 2 4 8)
@@ -23,10 +23,10 @@ for json_file in "${json_files[@]}"; do
         # Execute the command chain N times
         for i in $(seq 1 $N); do
             # Run the new command chain, redirecting stderr to stdout to capture 'time' output
-            output=$( { cat "data/$json_file" | jq -cM '{ts: .timestamp, user: .user, bot: .bot, type: .type}' | python3 proc.py log 1 | cat log | time target/release/timelymon "edit(user,0) AND ONCE[1,1] edit(user,0)" -w $workers -m 1 2>&1 > /dev/null; } 2>&1 )
+            output=$( { time (cat "data/$json_file" | jq -cM '{ts: .timestamp, user: .user, bot: .bot, type: .type}' | python3 proc.py log 1 && cat log | target/release/timelymon "edit(user,0) AND ONCE[1,1] edit(user,0)" -w $workers -m 1) 2>&1 > /dev/null; } 2>&1)
 
-            # Extract the total time from the output for timelymon command
-            timelymon_time=$(echo "$output" | awk '/real/ {print $1}')
+            # Extract the total time from the output for the entire chain, convert it to seconds, and format it to three decimal places
+            timelymon_time=$(echo "$output" | awk '/real/ { split($2, time, /[ms]/); printf "%.3f\n", time[1] * 60 + time[2] }')
 
             # Append time to the file
             echo "$timelymon_time" >> "$timelymon_times_file"

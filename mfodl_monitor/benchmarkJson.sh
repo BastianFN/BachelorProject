@@ -23,10 +23,10 @@ for json_file in "${json_files[@]}"; do
         # Execute the timelymon command N times
         for i in $(seq 1 $N); do
             # Run the command, redirecting stderr to stdout to capture 'time' output
-            output=$( { cat "data/$json_file" | time target/release/timelymon "{.user & .type = \"edit\" & .bot = false} AND ONCE[1,1] {.user & .type = \"edit\" & .bot = false}" -w $workers -m 1 -f json 2>&1 > /dev/null; } 2>&1 )
+            output=$( { time (cat "data/$json_file" | target/release/timelymon "{.user & .type = \"edit\" & .bot = false} AND ONCE[1,1] {.user & .type = \"edit\" & .bot = false}" -w $workers -m 1 -f json) 2>&1 > /dev/null; } 2>&1 )
 
-            # Extract the total time from the output for timelymon command
-            timelymon_time=$(echo "$output" | awk '/real/ {print $1}')
+            # Extract the total time from the output for the entire chain, convert it to seconds, and format it to three decimal places
+            timelymon_time=$(echo "$output" | awk '/real/ { split($2, time, /[ms]/); printf "%.3f\n", time[1] * 60 + time[2] }')
 
             # Append time to the file
             echo "$timelymon_time" >> "$timelymon_times_file"

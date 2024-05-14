@@ -8,7 +8,7 @@ worker_counts = [1, 2, 4, 8]
 iterations = 20
 
 # Directory containing the data files
-data_dir = './first_benchmark_results/pipe'  # adjust this path to where your files are stored
+data_dir = './first_benchmark_results/pipe'
 
 # Prepare to collect data for plotting
 plot_data = {size: [] for size in json_sizes}

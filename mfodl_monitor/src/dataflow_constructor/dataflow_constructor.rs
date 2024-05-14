@@ -37,6 +37,7 @@ type MonitorStream<G> = Stream<G, Record>;
 type DataStream<G> = Stream<G, String>;
 type TimeStream<G> = Stream<G, TimeFlowValues>;
 
+//TODO change data_stream: Stream<G, String> to Stream<G, Constant>.
 struct DataflowConstructor<G: Scope<Timestamp = usize>> {
     data_stream: Stream<G, String>,
     stream_map: HashMap<Expr, (Vec<String>, MonitorStream<G>)>,
@@ -307,24 +308,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                     let parsed_result = serde_json::from_str(result);
                                     match parsed_result {
                                         Ok(result) => {
-                                            let constant = match result {
-                                                // TODO maybe refactor this
-                                                serde_json::Value::String(x) => {
-                                                    Constant::Str(x)
-                                                }
-                                                serde_json::Value::Number(x) => {
-                                                    Constant::Int(x.as_i64().unwrap() as i32)
-                                                }
-                                                // probably shouldn't be a string?
-                                                serde_json::Value::Bool(x) => {
-                                                    Constant::Str(x.to_string())
-                                                }
-                                                // TODO add support for objects
-                                                // serde_json::Value::Object(x) => {
-                                                //     println!("Object: {:?}", x);
-                                                // }
-                                                _ => Constant::Str("".to_string()),
-                                            };
+                                            let constant = Constant::JSONValue(result);
                                             if stash.contains_key(&tp) {
                                                 if !stash.entry(tp).or_default().contains(&constant)
                                                 {

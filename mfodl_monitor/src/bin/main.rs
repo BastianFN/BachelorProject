@@ -60,7 +60,7 @@ pub struct ProgArgs {
 
     /// Step size of workers
     /// TODO Change back to 1000?
-    #[structopt(short, long, default_value = "1")]
+    #[structopt(short, long, default_value = "1000")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)
@@ -171,6 +171,7 @@ fn main() {
                                                     out += &format!("{:?})", x);
                                                 }
                                                 Constant::Str(_) => {}
+                                                Constant::JSONValue(_) => {}
                                             }
                                         }
                                     }
@@ -250,8 +251,8 @@ fn execute_from_stdin(
                                 let line = line.expect("Error reading line from stdin");
                                 match serde_json::from_str::<serde_json::Value>(&line) {
                                     Ok(json_value) => {
+                                        // TODO should we actually recursively find timestamp? Or just keep each line as a string and take the first timestamp?
                                         let objects = find_nested_objects(&json_value);
-                                        // TODO Create a recursive function to handle nested JSON
                                         for object in objects {
                                             if let Some(timestamp) = find_timestamp(&object) {
                                                 let ts = timestamp as usize;
@@ -263,6 +264,9 @@ fn execute_from_stdin(
                                                     current_is_set = true;
                                                 }
                                                 // println!("Item: {:?}", object);
+                                                // TODO implement a way where JSON doesn't have to be converted to string.
+                                                // ^This should happen in the give() function
+                                                // let const_val = Constant::JSONValue(object);
                                                 let val = object.to_string();
                                                 // add [] around the value to make it a list
                                                 let val = format!("[{}]", val);
@@ -270,7 +274,7 @@ fn execute_from_stdin(
                                                     input.session(cap.delayed(&ts)).give(val);
                                                     worker.step();
                                                 } else {
-                                                    //TODO handle this the appropriate way
+                                                    //TODO is this the correct way to handle this?
                                                     current_segment.push(val);
                                                     threshold = threshold + 1;
                                                     if threshold >= options.get_step() {

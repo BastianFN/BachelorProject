@@ -1,10 +1,15 @@
-use std::fmt;
+use std::{cmp, fmt};
 
 use constants::CONJ_NEG_ERROR;
 use parser::formula_syntax_tree::Constant::{Int, Str};
 use parser::formula_syntax_tree::Formula::*;
-use std::collections::{BTreeSet, HashSet};
 use serde_json::Value;
+use std::collections::{BTreeSet, HashSet};
+
+use abomonation::Abomonation;
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
+use std::io::{Result as IOResult, Write};
 
 use timeunits::*;
 
@@ -39,14 +44,210 @@ pub enum Formula {
     FormulaError(String),
 }
 
-// impl Hash for Value {}
+impl Hash for Constant {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Constant::Int(i) => {
+                i.hash(state);
+            }
+            Constant::Str(s) => {
+                s.hash(state);
+            }
+            Constant::JSONValue(v) => {
+                hash_json_value(v, state);
+            }
+        }
+    }
+}
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq, Ord, PartialOrd, Abomonation)]
+fn hash_json_value<H: Hasher>(value: &Value, state: &mut H) {
+    match value {
+        Value::Null => {
+            "Null".hash(state);
+        }
+        Value::Bool(b) => {
+            b.hash(state);
+        }
+        Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                u.hash(state);
+            } else if let Some(i) = n.as_i64() {
+                i.hash(state);
+            } else if let Some(f) = n.as_f64() {
+                f.to_bits().hash(state); // Hash float as bits to avoid precision issues
+            }
+        }
+        Value::String(s) => {
+            s.hash(state);
+        }
+        Value::Array(vec) => {
+            vec.len().hash(state); // Hash the length to differentiate from similar concatenated values
+            for item in vec {
+                hash_json_value(item, state);
+            }
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort(); // Sorting keys for consistent hashing. JSON objects are unordered.
+            keys.len().hash(state);
+            for key in keys {
+                key.hash(state);
+                hash_json_value(&map[key], state);
+            }
+        }
+    }
+}
+
+impl Ord for Constant {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Constant::Int(a), Constant::Int(b)) => a.cmp(b),
+            (Constant::Str(a), Constant::Str(b)) => a.cmp(b),
+            (Constant::JSONValue(a), Constant::JSONValue(b)) => cmp_json_values(a, b),
+            (Constant::Int(_), _) => Ordering::Less,
+            (Constant::Str(_), Constant::Int(_)) => Ordering::Greater,
+            (Constant::Str(_), _) => Ordering::Less,
+            (Constant::JSONValue(_), Constant::Int(_)) => Ordering::Greater,
+            (Constant::JSONValue(_), Constant::Str(_)) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for Constant {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn cmp_json_values(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        // Null < Bool < Number < String < Array < Object
+        (Value::Null, Value::Null) => Ordering::Equal,
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::Number(a), Value::Number(b)) => cmp_numbers(a, b),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        (Value::Array(a), Value::Array(b)) => cmp_arrays(a, b),
+        (Value::Object(a), Value::Object(b)) => cmp_objects(a, b),
+        (Value::Null, _) => Ordering::Less,
+        (Value::Bool(_), Value::Null) => Ordering::Greater,
+        (Value::Bool(_), _) => Ordering::Less,
+        (Value::Number(_), Value::Null) => Ordering::Greater,
+        (Value::Number(_), Value::Bool(_)) => Ordering::Greater,
+        (Value::Number(_), _) => Ordering::Less,
+        (Value::String(_), Value::Null) => Ordering::Greater,
+        (Value::String(_), Value::Bool(_)) => Ordering::Greater,
+        (Value::String(_), Value::Number(_)) => Ordering::Greater,
+        (Value::String(_), _) => Ordering::Less,
+        (Value::Array(_), Value::Null) => Ordering::Greater,
+        (Value::Array(_), Value::Bool(_)) => Ordering::Greater,
+        (Value::Array(_), Value::Number(_)) => Ordering::Greater,
+        (Value::Array(_), Value::String(_)) => Ordering::Greater,
+        (Value::Array(_), _) => Ordering::Less,
+        (Value::Object(_), _) => Ordering::Less,
+    }
+}
+
+fn cmp_objects(a: &serde_json::Map<String, Value>, b: &serde_json::Map<String, Value>) -> Ordering {
+    let mut a_keys: Vec<&String> = a.keys().collect();
+    let mut b_keys: Vec<&String> = b.keys().collect();
+    a_keys.sort();
+    b_keys.sort();
+    for (ak, bk) in a_keys.iter().zip(b_keys.iter()) {
+        match cmp_json_values(&a[*ak], &b[*bk]) {
+            Ordering::Equal => continue,
+            non_eq => return non_eq,
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+fn cmp_arrays(a: &Vec<Value>, b: &Vec<Value>) -> Ordering {
+    // Lexicographically compare array elements one by one
+    for (a_elem, b_elem) in a.iter().zip(b.iter()) {
+        let cmp = cmp_json_values(a_elem, b_elem);
+        if cmp != Ordering::Equal {
+            return cmp;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+fn cmp_numbers(a: &serde_json::Number, b: &serde_json::Number) -> Ordering {
+    if let (Some(ai), Some(bi)) = (a.as_i64(), b.as_i64()) {
+        ai.cmp(&bi)
+    } else if let (Some(af), Some(bf)) = (a.as_f64(), b.as_f64()) {
+        cmp_floats(af, bf)
+    } else if let (Some(ai), Some(bf)) = (a.as_i64(), b.as_f64()) {
+        // transform integer to float and compare
+        let as_f64 = ai as f64;
+        cmp_floats(as_f64, bf)
+    } else if let (Some(af), Some(bi)) = (a.as_f64(), b.as_i64()) {
+        // transform integer to float and compare
+        let bs_f64 = bi as f64;
+        cmp_floats(af, bs_f64)
+    } else {
+        Ordering::Equal
+    }
+}
+
+fn cmp_floats(a: f64, b: f64) -> Ordering {
+    let cmp = f64::min(a, b);
+    if cmp == a {
+        Ordering::Less
+    } else if cmp == b {
+        Ordering::Greater
+    } else {
+        Ordering::Equal
+    }
+}
+
+// extremely expensive but should work?
+impl Abomonation for Constant {
+    unsafe fn entomb<W: Write>(&self, write: &mut W) -> IOResult<()> {
+        match self {
+            Constant::Int(i) => i.entomb(write),
+            Constant::Str(s) => s.entomb(write),
+            Constant::JSONValue(v) => {
+                let json_str = serde_json::to_string(v).unwrap();
+                //TODO probably send length of string first. use "header" that is 8 bytes or so
+                let json_str_bytes = json_str.as_bytes();
+                write.write_all(json_str_bytes)?;
+                write.write_all(&[0])?;
+                Ok(())
+            }
+        }
+    }
+    unsafe fn exhume<'a, 'b>(&'a mut self, bytes: &'b mut [u8]) -> Option<&'b mut [u8]> {
+        match self {
+            Constant::Int(i) => i.exhume(bytes),
+            Constant::Str(s) => s.exhume(bytes),
+            Constant::JSONValue(v) => {
+                // TODO as seen above in entomb, this is not efficient
+                let json_end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len()); // assuming zero-terminated JSON strings like above
+                let json_str = std::str::from_utf8(&bytes[..json_end]).ok()?;
+                *v = serde_json::from_str(json_str).ok()?;
+                Some(&mut bytes[json_end..])
+            }
+        }
+    }
+    fn extent(&self) -> usize {
+        match self {
+            Constant::Int(i) => i.extent(),
+            Constant::Str(s) => s.extent(),
+            Constant::JSONValue(v) => {
+                let json_str = serde_json::to_string(v).unwrap();
+                json_str.len()
+            }
+        }
+    }
+}
+
+// TODO add json object
+#[derive(Eq, Clone, Debug, PartialEq)]
 pub enum Constant {
     Int(i32),
     Str(String),
-    // TODO add json object
-    // JSONValue(Value),
+    JSONValue(Value),
 }
 
 #[derive(Hash, Eq, Clone, Debug, PartialEq, Ord, PartialOrd, Abomonation)]
@@ -70,6 +271,10 @@ impl fmt::Display for Constant {
             match self {
                 Int(i) => i.to_string(),
                 Str(s) => format!("'{}'", s.to_string()).to_string(),
+                Constant::JSONValue(v) => {
+                    let json_str = serde_json::to_string(v).unwrap();
+                    json_str
+                }
             }
         )
     }
@@ -84,6 +289,10 @@ impl fmt::Display for Arg {
                 Arg::Cst(i) => match i {
                     Int(i) => i.to_string(),
                     Str(s) => format!("'{}'", s.to_string()).to_string(),
+                    Constant::JSONValue(v) => {
+                        let json_str = serde_json::to_string(v).unwrap();
+                        json_str
+                    }
                 },
                 Arg::Var(v) => format!("{}", v).to_string(),
             }

@@ -243,7 +243,7 @@ impl<G: Scope<Timestamp = usize>> SupportOperators<G> for Stream<G, Record> {
                             match rec {
                                 Data(true, arg) => {
                                     if let Some(ts) = tp_to_ts.get(time.time()) {
-                                        println!("@{ts} (time 2 point {}): {}", time.time(), format_record(arg));
+                                        println!("@{ts} (time point {}): {}", time.time(), format_record(arg));
                                     } else {
                                         stash.push((*time.time(), arg))
                                     }

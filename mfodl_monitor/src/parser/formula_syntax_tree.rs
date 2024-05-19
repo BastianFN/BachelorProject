@@ -242,7 +242,6 @@ impl Abomonation for Constant {
     }
 }
 
-// TODO add json object
 #[derive(Eq, Clone, Debug, PartialEq)]
 pub enum Constant {
     Int(i32),

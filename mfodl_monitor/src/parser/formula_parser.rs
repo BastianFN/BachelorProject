@@ -312,7 +312,7 @@ pub fn parse_json_query(s: &str) -> Formula {
 }
 
 fn construct_jq_query(conditions: Vec<(String, String)>, projections: Vec<String>) -> String {
-    let mut jq_query = String::from(".[] | select(");
+    let mut jq_query = String::from("select(");
 
     // Add conditions, formatting values as strings or numbers accordingly
     let conditions_str: Vec<String> = conditions

@@ -59,7 +59,7 @@ pub struct ProgArgs {
     mode_out_put: usize,
 
     /// Step size of workers
-    /// TODO Change back to 1000?
+    /// TODO Different results depending on size?
     #[structopt(short, long, default_value = "1000")]
     step: usize,
 
@@ -90,7 +90,6 @@ fn main() {
     options.set_workers(args.workers);
     options.set_output_file(args.output_file);
     options.set_step(args.step);
-    // options.set_step(20);
     options.set_output_batch(args.batch_output);
     options.set_deduplication(args.deduplication);
 
@@ -252,9 +251,9 @@ fn execute_from_stdin(
                                 match serde_json::from_str::<serde_json::Value>(&line) {
                                     Ok(json_value) => {
                                         // TODO should we actually recursively find timestamp? Or just keep each line as a string and take the first timestamp?
-                                        let objects = find_nested_objects(&json_value);
-                                        for object in objects {
-                                            if let Some(timestamp) = find_timestamp(&object) {
+                                        // let objects = find_nested_objects(&json_value);
+                                        // for object in objects {
+                                            if let Some(timestamp) = find_timestamp(&json_value) {
                                                 let ts = timestamp as usize;
                                                 time_input
                                                     .session(time_cap.delayed(&ts))
@@ -267,9 +266,7 @@ fn execute_from_stdin(
                                                 // TODO implement a way where JSON doesn't have to be converted to string.
                                                 // ^This should happen in the give() function
                                                 // let const_val = Constant::JSONValue(object);
-                                                let val = object.to_string();
-                                                // add [] around the value to make it a list
-                                                let val = format!("[{}]", val);
+                                                let val = json_value.to_string();
                                                 if options.get_step() == 1 {
                                                     input.session(cap.delayed(&ts)).give(val);
                                                     worker.step();
@@ -278,11 +275,9 @@ fn execute_from_stdin(
                                                     current_segment.push(val);
                                                     threshold = threshold + 1;
                                                     if threshold >= options.get_step() {
-                                                        input
-                                                            .session(cap.delayed(&ts))
-                                                            .give_iterator(
-                                                                current_segment.drain(..),
-                                                            );
+                                                        input.session(cap.delayed(&ts)).give_iterator(
+                                                            current_segment.clone().into_iter(),
+                                                        );
                                                         worker.step();
                                                         threshold = 0;
                                                         // this is to avoid the vector being reallocated
@@ -292,7 +287,7 @@ fn execute_from_stdin(
                                                     }
                                                 }
                                             }
-                                        }
+                                        // }
                                     }
                                     Err(e) => println!("JSON Parsing Error: {}", e),
                                 }
@@ -346,7 +341,7 @@ fn execute_from_stdin(
 
                                         if options.get_step() == 1 {
                                             input.session(cap.delayed(&tp)).give(val.to_string());
-                                            worker.step();
+                                         worker.step();
                                         } else {
                                             current_segment.push(val.to_string())
                                         }

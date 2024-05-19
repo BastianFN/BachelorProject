@@ -314,19 +314,18 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                 {
                                                     let mut tmp = Vec::with_capacity(8);
                                                     stash
-                                                        .entry(tp)
-                                                        .or_default()
-                                                        .insert(constant.clone());
-
-                                                    tmp.push(constant);
-                                                    output.session(&time).give(Data(true, tmp));
-                                                }
-                                            } else {
+                                                    .entry(tp)
+                                                    .or_default()
+                                                    .insert(constant.clone());
+                                                
+                                                tmp.push(constant);
+                                                output.session(&time).give(Data(true, tmp));
+                                            }
+                                        } else {
                                                 let mut tmp = HashSet::with_capacity(8);
                                                 tmp.insert(constant.clone());
                                                 stash.insert(tp, tmp);
                                                 let mut tmp = Vec::with_capacity(8);
-
                                                 tmp.push(constant);
                                                 output.session(&time).give(Data(true, tmp));
                                             }

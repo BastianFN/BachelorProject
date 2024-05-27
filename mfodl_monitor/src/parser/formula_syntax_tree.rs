@@ -101,6 +101,7 @@ fn hash_json_value<H: Hasher>(value: &Value, state: &mut H) {
 impl Ord for Constant {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
+            // Int < Str < JSONValue
             (Constant::Int(a), Constant::Int(b)) => a.cmp(b),
             (Constant::Str(a), Constant::Str(b)) => a.cmp(b),
             (Constant::JSONValue(a), Constant::JSONValue(b)) => cmp_json_values(a, b),

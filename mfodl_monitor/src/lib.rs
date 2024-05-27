@@ -10,6 +10,7 @@ extern crate serde;
 extern crate serde_json;
 extern crate tempfile;
 extern crate jq_rs;
+extern crate regex;
 
 
 #[macro_use]

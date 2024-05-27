@@ -289,6 +289,9 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
             self.data_stream
                 .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
                     let mut compiled_query = jq_compile(&query).unwrap();
+                    // let new_query = "select(.timestamp == 1714134706 and .length.old == 2927 + 1) | {user: .user, bot: .bot}";
+                    // let mut compiled_query = jq_compile(&new_query).unwrap();
+
                     let mut notifier = FrontierNotificator::new();
                     let mut stash: HashMap<usize, HashSet<Constant>> = HashMap::new();
                     move |input, output| {
@@ -314,14 +317,14 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                 {
                                                     let mut tmp = Vec::with_capacity(8);
                                                     stash
-                                                    .entry(tp)
-                                                    .or_default()
-                                                    .insert(constant.clone());
-                                                
-                                                tmp.push(constant);
-                                                output.session(&time).give(Data(true, tmp));
-                                            }
-                                        } else {
+                                                        .entry(tp)
+                                                        .or_default()
+                                                        .insert(constant.clone());
+
+                                                    tmp.push(constant);
+                                                    output.session(&time).give(Data(true, tmp));
+                                                }
+                                            } else {
                                                 let mut tmp = HashSet::with_capacity(8);
                                                 tmp.insert(constant.clone());
                                                 stash.insert(tp, tmp);

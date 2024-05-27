@@ -237,6 +237,7 @@ fn execute_from_stdin(
                 });
 
             let file_type = file_type.clone();
+
             if worker.index() == 0 {
                 let mut current = 0;
                 let mut current_is_set = false;
@@ -250,44 +251,28 @@ fn execute_from_stdin(
                                 let line = line.expect("Error reading line from stdin");
                                 match serde_json::from_str::<serde_json::Value>(&line) {
                                     Ok(json_value) => {
-                                        // TODO should we actually recursively find timestamp? Or just keep each line as a string and take the first timestamp?
-                                        // let objects = find_nested_objects(&json_value);
-                                        // for object in objects {
-                                            if let Some(timestamp) = find_timestamp(&json_value) {
-                                                let ts = timestamp as usize;
-                                                time_input
-                                                    .session(time_cap.delayed(&ts))
-                                                    .give(Timestamp(ts));
-                                                if !current_is_set {
-                                                    current = ts;
-                                                    current_is_set = true;
-                                                }
-                                                // println!("Item: {:?}", object);
-                                                // TODO implement a way where JSON doesn't have to be converted to string.
-                                                // ^This should happen in the give() function
-                                                // let const_val = Constant::JSONValue(object);
-                                                let val = json_value.to_string();
-                                                if options.get_step() == 1 {
-                                                    input.session(cap.delayed(&ts)).give(val);
+                                        if let Some(timestamp) = find_timestamp(&json_value) {
+                                            let ts = timestamp as usize;
+                                            time_input
+                                                .session(time_cap.delayed(&ts))
+                                                .give(Timestamp(ts));
+                                            if !current_is_set {
+                                                current = ts;
+                                                current_is_set = true;
+                                            }
+                                            let val = json_value.to_string();
+                                            if options.get_step() == 1 {
+                                                input.session(cap.delayed(&ts)).give(val);
+                                                worker.step();
+                                            } else {
+                                                threshold = threshold + 1;
+                                                input.session(cap.delayed(&ts)).give(val);
+                                                if threshold >= options.get_step() {
                                                     worker.step();
-                                                } else {
-                                                    //TODO is this the correct way to handle this?
-                                                    current_segment.push(val);
-                                                    threshold = threshold + 1;
-                                                    if threshold >= options.get_step() {
-                                                        input.session(cap.delayed(&ts)).give_iterator(
-                                                            current_segment.clone().into_iter(),
-                                                        );
-                                                        worker.step();
-                                                        threshold = 0;
-                                                        // this is to avoid the vector being reallocated
-                                                        // current_segment =
-                                                        //     Vec::with_capacity(options.get_step());
-                                                        current_segment.clear();
-                                                    }
+                                                    threshold = 0;
                                                 }
                                             }
-                                        // }
+                                        }
                                     }
                                     Err(e) => println!("JSON Parsing Error: {}", e),
                                 }
@@ -326,7 +311,6 @@ fn execute_from_stdin(
                                                     current_segment.clone().into_iter(),
                                                 );
                                             }
-
                                             current_segment.clear();
                                             current = tp;
                                             current_segment.push(val.to_string());
@@ -341,7 +325,7 @@ fn execute_from_stdin(
 
                                         if options.get_step() == 1 {
                                             input.session(cap.delayed(&tp)).give(val.to_string());
-                                         worker.step();
+                                            worker.step();
                                         } else {
                                             current_segment.push(val.to_string())
                                         }
@@ -370,6 +354,12 @@ fn execute_from_stdin(
                         }
                     }
                 }
+
+                // input.session(cap.delayed(&current)).give_iterator(
+                //     current_segment.clone().into_iter(),
+                // );
+
+                worker.step();
 
                 let new_prod = current + 1;
                 time_input

@@ -8,7 +8,7 @@ worker_counts = [1, 2, 4, 8]
 iterations = 20
 
 # Directory containing the data files
-data_dir = './first_benchmark_results/pipe'
+data_dir = './first_benchmark_results/json/step1000/'
 
 # Prepare to collect data for plotting
 plot_data = {size: [] for size in json_sizes}
@@ -18,7 +18,7 @@ for size in json_sizes:
     for workers in worker_counts:
         # filename = f"json_data{size}_{workers}w.txt"
         # filename = f"csv_data{size}_{workers}w.txt"
-        filename = f"pipe_data{size}_{workers}w.txt"
+        filename = f"json_data{size}_{workers}w.txt"
         filepath = os.path.join(data_dir, filename)
         
         try:

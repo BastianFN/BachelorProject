@@ -156,8 +156,11 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                     }
 
                                                     if stash.contains_key(&tp) {
+                                                        // println!("stash {:?}, time: {:?}", d, tp);
                                                         if !stash.entry(tp).or_default().contains(d)
                                                         {
+                                                            // count_outputs += 1;
+                                                            // println!("count");
                                                             stash
                                                                 .entry(tp)
                                                                 .or_default()
@@ -167,6 +170,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
                                                                 .give(Data(true, new_vars));
                                                         }
                                                     } else {
+                                                        // count_outputs += 1;
                                                         let mut tmp = HashSet::with_capacity(8);
                                                         tmp.insert(d.clone());
                                                         stash.insert(tp, tmp);

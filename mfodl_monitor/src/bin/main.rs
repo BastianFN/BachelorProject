@@ -60,7 +60,7 @@ pub struct ProgArgs {
 
     /// Step size of workers
     /// TODO Different results depending on size?
-    #[structopt(short, long, default_value = "1000")]
+    #[structopt(short, long, default_value = "1")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)
@@ -294,7 +294,14 @@ fn execute_from_stdin(
                                                 worker.step();
                                             } else {
                                                 // println!("Pushing to current segment: {}", val);
-                                                current_segment.push(val.to_string())
+                                                threshold = threshold + 1;
+                                                input
+                                                    .session(cap.delayed(&ts))
+                                                    .give(val.to_string());
+                                                if threshold >= options.get_step() {
+                                                    worker.step();
+                                                    threshold = 0;
+                                                }
                                             }
                                         } else {
                                             time_input
@@ -307,14 +314,19 @@ fn execute_from_stdin(
                                                     .session(cap.delayed(&tp))
                                                     .give(val.to_string());
                                             } else {
-                                                input.session(cap.delayed(&tp)).give_iterator(
-                                                    current_segment.clone().into_iter(),
-                                                );
+                                                threshold = threshold + 1;
+                                                input
+                                                    .session(cap.delayed(&ts))
+                                                    .give(val.to_string());
+                                                if threshold >= options.get_step() {
+                                                    worker.step();
+                                                    threshold = 0;
+                                                }
                                             }
-                                            current_segment.clear();
+                                            // current_segment.clear();
                                             current = tp;
-                                            current_segment.push(val.to_string());
-                                            worker.step();
+                                            // current_segment.push(val.to_string());
+                                            // worker.step();
                                         }
                                     } else {
                                         current = tp;
@@ -327,7 +339,12 @@ fn execute_from_stdin(
                                             input.session(cap.delayed(&tp)).give(val.to_string());
                                             worker.step();
                                         } else {
-                                            current_segment.push(val.to_string())
+                                            threshold = threshold + 1;
+                                            input.session(cap.delayed(&ts)).give(val.to_string());
+                                            if threshold >= options.get_step() {
+                                                worker.step();
+                                                threshold = 0;
+                                            }
                                         }
                                     }
                                 }

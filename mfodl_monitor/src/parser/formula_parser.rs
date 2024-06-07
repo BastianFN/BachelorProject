@@ -30,8 +30,8 @@ use timeunits::*;
 ///                   'A' var '.' formula_l1 |
 ///                   p(arg+) | p() | eos |
 ///                   json
-/// json          --> '{' query '}'
-/// query         --> field | field '=' value | query '&' query
+/// json          --> '<<' query '>>'
+/// query         --> field | field 'op' value | query '&' query
 
 // This is the public method to parse a formula.
 pub fn parse_fact(s: &str) -> (String, Vec<Constant>) {

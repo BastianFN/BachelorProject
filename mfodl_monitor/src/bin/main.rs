@@ -30,7 +30,7 @@ use mfodl_monitor::parser::csv_parser::{
     parse_file_to_segments, parser_extended_wrapper, ParserReturn, Segment,
 };
 
-use mfodl_monitor::parser::json_parser::{find_nested_objects, find_timestamp};
+use mfodl_monitor::parser::json_parser::find_timestamp;
 
 // const MODE_VALS: &[&str] = &["order", "out_of_order"];
 
@@ -293,7 +293,7 @@ fn execute_from_stdin(
                                                     .give(val.to_string());
                                                 worker.step();
                                             } else {
-                                                // println!("Pushing to current segment: {}", val);
+                                                // current_segment.push(val.to_string())
                                                 threshold = threshold + 1;
                                                 input
                                                     .session(cap.delayed(&ts))
@@ -326,7 +326,7 @@ fn execute_from_stdin(
                                             // current_segment.clear();
                                             current = tp;
                                             // current_segment.push(val.to_string());
-                                            // worker.step();
+                                            worker.step();
                                         }
                                     } else {
                                         current = tp;

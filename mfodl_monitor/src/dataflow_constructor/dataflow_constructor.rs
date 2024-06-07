@@ -293,8 +293,6 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
             self.data_stream
                 .unary_frontier(exchange, "Base Stream", move |_cap, _info| {
                     let mut compiled_query = jq_compile(&query).unwrap();
-                    // let new_query = "select(.timestamp == 1714134706 and .length.old == 2927 + 1) | {user: .user, bot: .bot}";
-                    // let mut compiled_query = jq_compile(&new_query).unwrap();
 
                     let mut notifier = FrontierNotificator::new();
                     let mut stash: HashMap<usize, HashSet<Constant>> = HashMap::new();
@@ -492,6 +490,7 @@ impl<'a, G: Scope<Timestamp = usize>> DataflowConstructor<G> {
         if self.stream_map.contains_key(&plan) {
             return self.stream_map.get(&plan).unwrap().clone();
         }
+
         let out = match plan.clone() {
             FULL => self.create_true_stream(visitor),
             EMPTY => self.create_false_stream(visitor),

@@ -343,7 +343,6 @@ impl fmt::Display for Formula {
             }
             JSONQuery(name, aliases) => {
                 str.push_str(&name);
-                //TODO check if this part makes sense
                 if !aliases.is_empty() {
                     let mut tmp = String::new();
                     for i in 0..(aliases.len() - 1) {

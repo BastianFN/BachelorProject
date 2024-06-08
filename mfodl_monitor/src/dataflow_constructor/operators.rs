@@ -3730,7 +3730,6 @@ pub(crate) fn var_equals_val(tuple: &Vec<Constant>, val: &Arg, indices: &Vec<usi
                                 _ => {}
                             }
                         }
-                        //TODO this correct?
                         Constant::JSONValue(vj) => {
                             match value {
                                 Constant::JSONValue(vv) => {

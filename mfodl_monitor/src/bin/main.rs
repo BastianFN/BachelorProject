@@ -59,8 +59,7 @@ pub struct ProgArgs {
     mode_out_put: usize,
 
     /// Step size of workers
-    /// TODO Different results depending on size?
-    #[structopt(short, long, default_value = "1")]
+    #[structopt(short, long, default_value = "1000")]
     step: usize,
 
     /// Duplication: default deduplication (0), or allows for duplicates (1)
@@ -70,10 +69,6 @@ pub struct ProgArgs {
     /// Batched output: number of outputs grouped together when -o 2 is set
     #[structopt(short, long, default_value = "1")]
     batch_output: usize,
-
-    /// Timestamp to filter JSON data by
-    #[structopt(short = "t", long = "timestamp")]
-    timestamp: Option<u64>,
 
     /// File type
     #[structopt(short = "f", long = "filetype")]

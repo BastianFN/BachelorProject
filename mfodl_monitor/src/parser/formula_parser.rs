@@ -1397,7 +1397,7 @@ mod tests {
 
     #[test]
     fn test_conditions_and_projections() {
-        let input = ".timestamp = 1714134706 and .user and .length.old = 2927 + 1 and .bot";
+        let input = ".timestamp = 1714134706 & .user & .length.old = 2927 + 1 & .bot";
         let conditions = vec![
             ".timestamp == 1714134706".to_string(),
             ".length.old == 2927 + 1".to_string(),
@@ -1410,7 +1410,7 @@ mod tests {
 
     #[test]
     fn test_conditions_with_different_operators() {
-        let input = ".timestamp != 1714134706 and .length.old >= 2927 and .user";
+        let input = ".timestamp != 1714134706 & .length.old >= 2927 & .user";
         let conditions = vec![
             ".timestamp != 1714134706".to_string(),
             ".length.old >= 2927".to_string(),
@@ -1423,7 +1423,7 @@ mod tests {
 
     #[test]
     fn test_parse_policy_conditions_projections() {
-        let input = ".timestamp = 1714134706 and .user and .length.old = 2927 + 1 and .bot";
+        let input = ".timestamp = 1714134706 & .user & .length.old = 2927 + 1 & .bot";
         let expected_conditions = vec![
             ".timestamp == 1714134706".to_string(),
             ".length.old == 2927 + 1".to_string(),
@@ -1438,7 +1438,7 @@ mod tests {
 
     #[test]
     fn test_parse_policy_no_conditions() {
-        let input = ".user and .bot";
+        let input = ".user & .bot";
         let expected_conditions: Vec<String> = vec![];
         let expected_projections = vec![".user".to_string(), ".bot".to_string()];
         let expected_aliases = vec![".user".to_string(), ".bot".to_string()];
@@ -1450,7 +1450,7 @@ mod tests {
 
     #[test]
     fn test_parse_policy_no_projections() {
-        let input = ".timestamp = 1714134706 and .length.old = 2927 + 1";
+        let input = ".timestamp = 1714134706 & .length.old = 2927 + 1";
         let expected_conditions = vec![
             ".timestamp == 1714134706".to_string(),
             ".length.old == 2927 + 1".to_string(),

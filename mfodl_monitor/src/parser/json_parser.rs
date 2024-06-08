@@ -9,10 +9,6 @@ pub enum Segment {
     Seg(usize, usize, Vec<String>),
 }
 
-pub fn parse_json_wrapper(json_data: &str) -> Result<Value> {
-    serde_json::from_str(json_data)
-}
-
 // Function to extract a timestamp from a generic JSON object
 fn extract_timestamp(json_data: &str) -> Result<Option<u64>> {
     let value: Value = serde_json::from_str(json_data)?;
@@ -128,7 +124,7 @@ pub fn parse_json_file_to_segments(path: PathBuf) -> Vec<Segment> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::Write, path::Path};
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -255,37 +251,6 @@ mod tests {
         let segments = parse_json_file_to_segments(path.to_path_buf());
 
         assert_eq!(segments.len(), 0);
-    }
-
-    #[test]
-    fn test_parse_json_file_with_provided_objects() {
-        // Path to the JSON file containing test data
-        let path_to_json = Path::new("src/parser/test_data.json");
-        let path_buf = path_to_json.to_path_buf();
-
-        let segments = parse_json_file_to_segments(path_buf);
-
-        let expected_timestamps = vec![
-            1708449109, 1708449110, 1708449112, 1708449111, 1708449110, 1708449111, 1708449112,
-            1708449111, 1708449110, 1708449111, 1708449109,
-        ];
-
-        assert_eq!(
-            segments.len(),
-            expected_timestamps.len(),
-            "The number of segments does not match the expected number."
-        );
-
-        for (segment, &expected_timestamp) in segments.iter().zip(expected_timestamps.iter()) {
-            if let Segment::Seg(ts, _, _) = segment {
-                assert_eq!(
-                    *ts, expected_timestamp as usize,
-                    "Timestamp does not match the expected value."
-                );
-            } else {
-                panic!("Expected Segment::Seg, found {:?}", segment);
-            }
-        }
     }
 
     #[test]

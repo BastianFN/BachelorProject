@@ -1,20 +1,15 @@
 #![allow(dead_code)]
 #![allow(unused_doc_comments)]
-use std::sync::{Arc, Mutex};
 
 use nom::IResult::Done;
 
 use nom::{alphanumeric, digit, IResult};
+use regex::Regex;
 use Formula::FormulaError;
 
 use parser::formula_parser::Constant::{Int, Str};
 use parser::formula_syntax_tree::*;
 use timeunits::*;
-
-use jq_rs::compile as jq_compile;
-use jq_rs::run as jq_run;
-use jq_rs::JqProgram;
-use serde_json::Value;
 
 /// formula       --> iff
 /// iff           --> implication '<->' implication
@@ -33,7 +28,10 @@ use serde_json::Value;
 ///                   '(' formula ')' |
 ///                   'E' var '.' formula_l1 |
 ///                   'A' var '.' formula_l1 |
-///                   p(arg+) | p() | eos
+///                   p(arg+) | p() | eos |
+///                   json
+/// json          --> '<<' query '>>'
+/// query         --> field | field 'op' value | query '&' query
 
 // This is the public method to parse a formula.
 pub fn parse_fact(s: &str) -> (String, Vec<Constant>) {
@@ -83,7 +81,6 @@ named!(clean_empty_fact<&str, (String, Vec<Constant>)>,
 
 pub fn parse_formula(s: &str) -> Formula {
     let tmp = s.clone();
-    println!("Parsing formula: {}", s);
     match formula(s) {
         Done(_i, o) => o,
         IResult::Error(x) => {
@@ -292,18 +289,11 @@ named!(formula_l2<&str, Formula>,
     ))
 );
 
-pub fn parse_json_formula(s: &str) -> Formula {
-    match json_query(s) {
-        Done(_i, o) => o,
-        _ => FormulaError("Json Error".to_string()),
-    }
-}
-
 named!(json_query<&str, Formula>,
     ws!(do_parse!(
-        tag!("{") >>
-        query: take_until!("}") >>
-        tag!("}") >>
+        tag!("<<") >>
+        query: take_until!(">>") >>
+        tag!(">>") >>
         (parse_json_query(query))
     ))
 );
@@ -318,90 +308,78 @@ pub fn parse_json_query(s: &str) -> Formula {
     Formula::JSONQuery(jq_query, aliases)
 }
 
-fn construct_jq_query(conditions: Vec<(String, String)>, projections: Vec<String>) -> String {
-    let mut jq_query = String::from(".[] | select(");
+fn construct_jq_query(conditions: Vec<String>, projections: Vec<String>) -> String {
+    if conditions.is_empty() && projections[0] == "" {
+        return String::from(".");
+    }
+    let mut jq_query = String::new();
+    if !conditions.is_empty() {
+        jq_query = String::from("select(");
 
-    // Add conditions, formatting values as strings or numbers accordingly
-    let conditions_str: Vec<String> = conditions
-        .iter()
-        .map(|(field, value)| {
-            // Check if the value is numeric or a boolean and format accordingly
-            let formatted_value = if value.chars().all(|c| c.is_digit(10) || c == '.') {
-                // Value looks numeric (simple check for digits and decimal point), leave as-is
-                value.clone()
-                // TODO handle boolean values properly. For now, assume they are strings
-            } else if value == "true" || value == "false" {
-                value.clone()
-            } else {
-                // Assume value is a string, enclose in quotes
-                format!("\"{}\"", value)
-            };
-            format!("{} == {}", field, formatted_value)
-        })
-        .collect();
-
-    jq_query.push_str(&conditions_str.join(" and "));
-    jq_query.push(')');
-
+        jq_query.push_str(&conditions.join(" and "));
+        jq_query.push(')');
+        if !projections.is_empty() {
+            jq_query.push_str(" | ");
+        }
+    }
     // Add projection
     if !projections.is_empty() {
-        // Assuming projections are already properly formatted
-        let projection_str = projections.join(" and ");
-        jq_query.push_str(" | ");
+        if projections.len() == 1 {
+            // Single projection, no need to use an object
+            jq_query.push_str(&projections[0]);
+        } else {
+            // Multiple projections, combine them into an object
+            let projection_str: Vec<String> = projections
+                .iter()
+                .map(|proj| {
+                    format!(
+                        "\"{}\": .{}",
+                        proj.trim_start_matches('.'),
+                        proj.trim_start_matches('.')
+                    )
+                })
+                .collect();
 
-        jq_query.push_str(&projection_str);
+            jq_query.push_str(&format!("{{{}}}", projection_str.join(", ")));
+        }
     }
-    // let compiled_program = jq_compile(&jq_query).unwrap();
     jq_query
 }
 
-fn parse_policy(policy: &str) -> (Vec<(String, String)>, Vec<String>, Vec<(String)>) {
+fn parse_policy(policy: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut conditions = vec![];
     let mut projections = vec![];
     let mut aliases = vec![];
 
-    for condition in policy.split('&').map(str::trim) {
-        let parts: Vec<&str> = condition.split('=').map(str::trim).collect();
-        if parts.len() == 2 {
-            conditions.push((parts[0].to_string(), parts[1].trim_matches('"').to_string()));
-        } else if parts.len() == 1 {
-            // Check for " AS " (with spaces to ensure it's a standalone word)
-            if parts[0].contains(" AS ") {
-                let projection_parts: Vec<&str> = parts[0].split(" AS ").collect();
-                if projection_parts.len() == 2 {
-                    projections.push(projection_parts[0].trim().to_string());
-                    aliases.push(projection_parts[1].trim().to_string());
-                }
-            } else {
-                projections.push(parts[0].to_string());
-                aliases.push(parts[0].to_string());
+    let condition_re = Regex::new(r"(\.\S+)\s+(==|!=|<=|>=|<|>|=)\s+(.+)").unwrap();
+    let alias_re = Regex::new(r"(\.\S+)\s+AS\s+(\S+)").unwrap();
+
+    for part in policy.split(" & ").map(str::trim) {
+        if let Some(captures) = condition_re.captures(part) {
+            let field = captures[1].to_string();
+            // Convert the operator to the jq equivalent
+            let operator = match &captures[2] {
+                "=" => "==",
+                op => op,
             }
+            .to_string();
+            let value = captures[3].to_string();
+
+            conditions.push(format!("{} {} {}", field, operator, value));
+        } else if let Some(captures) = alias_re.captures(part) {
+            let projection = captures[1].trim().to_string();
+            let alias = captures[2].trim().to_string();
+            projections.push(projection);
+            aliases.push(alias);
+        } else {
+            // Default projection without alias
+            projections.push(part.to_string());
+            aliases.push(part.to_string());
         }
     }
 
     (conditions, projections, aliases)
 }
-
-// pub fn process_json_query(
-//     query: &JqProgram,
-//     json_data: &str,
-// ) -> Result<Value, jq_rs::Error> {
-//     let result = query.run(json_data)?;
-
-//     // Attempt to parse the jq output as JSON to preserve the original data type
-//     let parsed_result: Result<Value, _> = serde_json::from_str(&result);
-
-//     match parsed_result {
-//         Ok(val) => {
-//             // Successfully parsed jq output as JSON, preserving the original type
-//             Ok(val)
-//         }
-//         Err(_) => {
-//             // Should handle the error here. For now, just return the raw string
-//             Ok(Value::String(result))
-//         }
-//     }
-// }
 
 /*fn formula_l2(input: &str) -> IResult<&str, Formula> {
     //println!("input {:?}", input);
@@ -662,13 +640,11 @@ mod tests {
     use parse_formula;
     use parser::formula_syntax_tree::Arg::{Cst, Var};
 
+    use super::*;
     use parser::formula_parser::{fin_interval, inf_interval, interval};
     use parser::formula_syntax_tree::Constant::{Int, Str};
-    use parser::formula_syntax_tree::*;
 
     use timeunits::{TimeInterval, TS};
-
-    use crate::parser::formula_parser::{construct_jq_query, parse_json_query, parse_policy};
 
     #[test]
     fn inf_interval_test() {
@@ -1388,38 +1364,102 @@ mod tests {
         assert_eq!(formula_expected, formula_actual);
     }
 
-    // #[test]
-    // fn parse_json_query_test() {
-    //     let input = "{{.user = user & .type = \"edit\" & .bot = 0}}";
-    //     let actual = parse_json_query(input);
-    //     let expected = (
-    //         Formula::JSONQuery(".user = user & .type = \"edit\" & .bot = 0".to_string()),
-    //         vec![],
-    //     );
-    //     assert_eq!(actual, expected);
-    // }
+    #[test]
+    fn test_no_conditions_no_projections() {
+        let input = "";
+        let expected = ".";
+        let result = construct_jq_query(vec![], vec!["".to_string()]);
+        assert_eq!(result, expected);
+    }
 
-    // #[test]
-    // fn test_parse_policy() {
-    //     let policy = ".user = .user & .type = \"edit\" & .bot = 0";
-    //     let expected_conditions = vec![
-    //         (".type".to_string(), "\"edit\"".to_string()),
-    //         (".bot".to_string(), "0".to_string()),
-    //     ];
-    //     let expected_projections = vec![".user".to_string()];
+    #[test]
+    fn test_only_conditions() {
+        let input = ".timestamp = 1714134706 and .length.old = 2927 + 1";
+        let conditions = vec![
+            ".timestamp == 1714134706".to_string(),
+            ".length.old == 2927 + 1".to_string(),
+        ];
+        let projections = vec![];
+        let expected = "select(.timestamp == 1714134706 and .length.old == 2927 + 1)";
+        let result = construct_jq_query(conditions, projections);
+        assert_eq!(result, expected);
+    }
 
-    //     let (conditions, projections, empty_vec) = parse_policy(policy);
+    #[test]
+    fn test_only_projections() {
+        let input = ".user and .bot";
+        let conditions = vec![];
+        let projections = vec![".user".to_string(), ".bot".to_string()];
+        let expected = "{\"user\": .user, \"bot\": .bot}";
+        let result = construct_jq_query(conditions, projections);
+        assert_eq!(result, expected);
+    }
 
-    //     assert_eq!(conditions, expected_conditions);
-    //     assert_eq!(projections, expected_projections);
-    // }
+    #[test]
+    fn test_conditions_and_projections() {
+        let input = ".timestamp = 1714134706 & .user & .length.old = 2927 + 1 & .bot";
+        let conditions = vec![
+            ".timestamp == 1714134706".to_string(),
+            ".length.old == 2927 + 1".to_string(),
+        ];
+        let projections = vec![".user".to_string(), ".bot".to_string()];
+        let expected = "select(.timestamp == 1714134706 and .length.old == 2927 + 1) | {\"user\": .user, \"bot\": .bot}";
+        let result = construct_jq_query(conditions, projections);
+        assert_eq!(result, expected);
+    }
 
-    // #[test]
-    // fn parse_and_construct_test() {
-    //     let policy = ".user = .user & .type = \"edit\" & .bot = 0";
-    //     let (conditions, projections, empty_vec) = parse_policy(policy);
-    //     let result = construct_jq_query(conditions, projections);
-    //     let expected = ".[] | select(.type == \"edit\" and .bot == 0) | .user";
-    //     assert_eq!(result, expected);
-    // }
+    #[test]
+    fn test_conditions_with_different_operators() {
+        let input = ".timestamp != 1714134706 & .length.old >= 2927 & .user";
+        let conditions = vec![
+            ".timestamp != 1714134706".to_string(),
+            ".length.old >= 2927".to_string(),
+        ];
+        let projections = vec![".user".to_string()];
+        let expected = "select(.timestamp != 1714134706 and .length.old >= 2927) | .user";
+        let result = construct_jq_query(conditions, projections);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_parse_policy_conditions_projections() {
+        let input = ".timestamp = 1714134706 & .user & .length.old = 2927 + 1 & .bot";
+        let expected_conditions = vec![
+            ".timestamp == 1714134706".to_string(),
+            ".length.old == 2927 + 1".to_string(),
+        ];
+        let expected_projections = vec![".user".to_string(), ".bot".to_string()];
+        let expected_aliases = vec![".user".to_string(), ".bot".to_string()];
+        let (conditions, projections, aliases) = parse_policy(input);
+        assert_eq!(conditions, expected_conditions);
+        assert_eq!(projections, expected_projections);
+        assert_eq!(aliases, expected_aliases);
+    }
+
+    #[test]
+    fn test_parse_policy_no_conditions() {
+        let input = ".user & .bot";
+        let expected_conditions: Vec<String> = vec![];
+        let expected_projections = vec![".user".to_string(), ".bot".to_string()];
+        let expected_aliases = vec![".user".to_string(), ".bot".to_string()];
+        let (conditions, projections, aliases) = parse_policy(input);
+        assert_eq!(conditions, expected_conditions);
+        assert_eq!(projections, expected_projections);
+        assert_eq!(aliases, expected_aliases);
+    }
+
+    #[test]
+    fn test_parse_policy_no_projections() {
+        let input = ".timestamp = 1714134706 & .length.old = 2927 + 1";
+        let expected_conditions = vec![
+            ".timestamp == 1714134706".to_string(),
+            ".length.old == 2927 + 1".to_string(),
+        ];
+        let expected_projections: Vec<String> = vec![];
+        let expected_aliases: Vec<String> = vec![];
+        let (conditions, projections, aliases) = parse_policy(input);
+        assert_eq!(conditions, expected_conditions);
+        assert_eq!(projections, expected_projections);
+        assert_eq!(aliases, expected_aliases);
+    }
 }

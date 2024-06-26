@@ -30,7 +30,11 @@ use mfodl_monitor::parser::csv_parser::{
     parse_file_to_segments, parser_extended_wrapper, ParserReturn, Segment,
 };
 
-use mfodl_monitor::parser::json_parser::find_timestamp;
+use mfodl_monitor::parser::json_parser::{
+find_timestamp, find_timestamp_native, object_check,
+};
+
+use jq_rs::compile as jq_compile;
 
 // const MODE_VALS: &[&str] = &["order", "out_of_order"];
 
@@ -212,18 +216,15 @@ fn execute_from_stdin(
             let mut tp_to_ts: HashMap<usize, usize> = HashMap::with_capacity(8);
             let send = send.lock().unwrap().clone();
             let tp_send = tp_send.lock().unwrap().clone();
+            let formula = parse_formula(&policy);
             let (mut input, mut cap, mut time_input, mut time_cap, _probe) = worker
                 .dataflow::<usize, _, _>(|scope| {
                     let ((time_input, time_cap), time_stream) =
                         scope.new_unordered_input::<TimeFlowValues>();
                     let ((input, input_cap), stream) = scope.new_unordered_input::<String>();
 
-                    let (_attrs, output) = create_dataflow(
-                        parse_formula(&policy),
-                        stream,
-                        time_stream,
-                        options.clone(),
-                    );
+                    let (_attrs, output) =
+                        create_dataflow(formula, stream, time_stream, options.clone());
 
                     let probe = output.probe();
                     output.capture_into(send);
@@ -244,32 +245,31 @@ fn execute_from_stdin(
                         if ft == "json" {
                             for line in io::stdin().lines() {
                                 let line = line.expect("Error reading line from stdin");
-                                match serde_json::from_str::<serde_json::Value>(&line) {
-                                    Ok(json_value) => {
-                                        if let Some(timestamp) = find_timestamp(&json_value) {
-                                            let ts = timestamp as usize;
-                                            time_input
-                                                .session(time_cap.delayed(&ts))
-                                                .give(Timestamp(ts));
-                                            if !current_is_set {
-                                                current = ts;
-                                                current_is_set = true;
-                                            }
-                                            let val = json_value.to_string();
-                                            if options.get_step() == 1 {
-                                                input.session(cap.delayed(&ts)).give(val);
-                                                worker.step();
-                                            } else {
-                                                threshold = threshold + 1;
-                                                input.session(cap.delayed(&ts)).give(val);
-                                                if threshold >= options.get_step() {
-                                                    worker.step();
-                                                    threshold = 0;
-                                                }
-                                            }
+                                if !object_check(&line) {
+                                    println!("Error: Invalid JSON object");
+                                    continue;
+                                }
+
+                                if let Some(timestamp) = find_timestamp_native(&line) {
+                                    let ts = timestamp;
+                                    time_input
+                                        .session(time_cap.delayed(&ts))
+                                        .give(Timestamp(ts));
+                                    if !current_is_set {
+                                        current = ts;
+                                        current_is_set = true;
+                                    }
+                                    if options.get_step() == 1 {
+                                        input.session(cap.delayed(&ts)).give(line);
+                                        worker.step();
+                                    } else {
+                                        threshold = threshold + 1;
+                                        input.session(cap.delayed(&ts)).give(line);
+                                        if threshold >= options.get_step() {
+                                            worker.step();
+                                            threshold = 0;
                                         }
                                     }
-                                    Err(e) => println!("JSON Parsing Error: {}", e),
                                 }
                             }
                         }

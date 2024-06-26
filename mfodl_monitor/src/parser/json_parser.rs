@@ -2,6 +2,8 @@ use serde_json::{Result, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use regex::Regex;
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub enum Segment {
@@ -67,6 +69,53 @@ pub fn find_nested_objects(value: &Value) -> Vec<Value> {
     }
 
     objects
+}
+
+// checks if the given string is a valid JSON object, without using serde
+pub fn object_check(json_data: &str) -> bool {
+    let mut brace_count = 0;
+    let mut bracket_count = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for c in json_data.chars() {
+        if escaped {
+            escaped = false;
+        } else {
+            match c {
+                '\\' if in_string => {
+                    escaped = true;
+                }
+                '"' => {
+                    in_string = !in_string;
+                }
+                '{' if !in_string => brace_count += 1,
+                '}' if !in_string => brace_count -= 1,
+                '[' if !in_string => bracket_count += 1,
+                ']' if !in_string => bracket_count -= 1,
+                _ => {}
+            }
+        }
+    }
+
+    brace_count == 0 && bracket_count == 0 && !json_data.trim().is_empty()
+}
+
+// checks the given string, for a timestamp field and returns it if found, without using jq or serde
+pub fn find_timestamp_native(json_str: &str) -> Option<usize> {
+    let key = "\"timestamp\":";
+    if let Some(start) = json_str.find(key) {
+        let rest = &json_str[start + key.len()..];
+        
+        let rest_trimmed = rest.trim_start();
+        
+        let end = rest_trimmed.find(|c: char| !c.is_digit(10)).unwrap_or(rest_trimmed.len());
+        
+        let timestamp = &rest_trimmed[..end].trim();
+        
+        return Some(timestamp.parse::<usize>().unwrap());
+    }
+    None
 }
 
 // Parses a JSON file and creates segments based on the extracted timestamps
